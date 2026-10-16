@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LibreShare Web Transfer</title>
+  <style>
+    :root {
+      --bg-color: #121212;
+      --card-bg: #1e1e1e;
+      --accent-color: #bb86fc;
+      --text-color: #e0e0e0;
+      --border-color: #333333;
+      --hover-bg: #2a2a2a;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    header {
+      width: 100%;
+      max-width: 800px;
+      padding: 20px 0;
+      margin-bottom: 24px;
+      border-bottom: 1px solid var(--border-color);
+      text-align: center;
+    }
+
+    header h1 {
+      font-size: 1.8rem;
+      color: var(--accent-color);
+    }
+
+    main {
+      width: 100%;
+      max-width: 800px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .drop-zone {
+      background-color: var(--card-bg);
+      border: 2px dashed var(--accent-color);
+      border-radius: 12px;
+      padding: 40px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: background-color 0.2s ease, border-color 0.2s ease;
+    }
+
+    .drop-zone:hover, .drop-zone.dragover {
+      background-color: var(--hover-bg);
+    }
+
+    .drop-zone p {
+      font-size: 1.1rem;
+      margin-bottom: 8px;
+    }
+
+    .drop-zone span {
+      font-size: 0.9rem;
+      color: #888888;
+    }
+
+    #file-input {
+      display: none;
+    }
+
+    .file-list-section {
+      background-color: var(--card-bg);
+      border-radius: 12px;
+      padding: 20px;
+    }
+
+    .file-list-section h2 {
+      font-size: 1.2rem;
+      margin-bottom: 16px;
+      color: var(--accent-color);
+    }
+
+    .file-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .file-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px;
+      background-color: var(--bg-color);
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+    }
+
+    .file-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .file-name {
+      font-weight: 500;
+    }
+
+    .file-size {
+      font-size: 0.85rem;
+      color: #888888;
+    }
+
+    .btn {
+      background-color: var(--accent-color);
+      color: #121212;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      transition: opacity 0.2s ease;
+    }
+
+    .btn:hover {
+      opacity: 0.9;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>LibreShare Web Transfer</h1>
+  </header>
+  <main>
+    <div class="drop-zone" id="drop-zone">
+      <p>Drag and drop files here</p>
+      <span>or click to browse from your device</span>
+      <input type="file" id="file-input" multiple />
+    </div>
+
+    <section class="file-list-section">
+      <h2>Available Files</h2>
+      <ul class="file-list" id="file-list">
+        <li class="file-item">
+          <div class="file-info">
+            <span class="file-name">No files shared yet</span>
+            <span class="file-size">-</span>
+          </div>
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <script>
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+
+    dropZone.addEventListener('click', () => fileInput.click());
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+      }, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+      dropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+      }, false);
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+      const files = e.dataTransfer.files;
+      handleFiles(files);
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      handleFiles(e.target.files);
+    });
+
+    function handleFiles(files) {
+      console.log('Files selected:', files);
+    }
+  </script>
+</body>
+</html>
