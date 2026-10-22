@@ -1,33 +1,51 @@
 import 'dart:io';
-import 'package:network_info_plus/network_info_plus.dart';
 
 class NetworkHelper {
-  static Future<String?> getLocalIpAddress() async {
-    try {
-      final info = NetworkInfo();
-      final wifiIp = await info.getWifiIP();
-      if (wifiIp != null && wifiIp.isNotEmpty && wifiIp != '127.0.0.1' && wifiIp != '0.0.0.0') {
-        return wifiIp;
-      }
-    } catch (_) {
-      // Fallback if plugin fails or platform isn't supported
-    }
-
+  static Future<String> getLocalIpAddress() async {
     try {
       final interfaces = await NetworkInterface.list(
         type: InternetAddressType.IPv4,
-        includeLinkLocal: false,
+        includeLoopback: false,
       );
 
-      for (final interface in interfaces) {
-        for (final addr in interface.addresses) {
-          if (!addr.isLoopback && addr.type == InternetAddressType.IPv4) {
-            return addr.address;
+      // لستة بالكروت المشبوهة بتاعت باقات الخطوط عشان نطنشها تماماً
+      final cellularKeywords = ['rmnet', 'ccmni', 'pdp', 'dummy'];
+
+      String? hotspotIp;
+      String? wifiIp;
+      String? anyLocalIp;
+
+      for (var interface in interfaces) {
+        // لو الكرت بتاع شريحة الخط .. طنشه واعدي
+        final isCellular = cellularKeywords.any((kw) => interface.name.toLowerCase().contains(kw));
+        if (isCellular) continue;
+
+        for (var addr in interface.addresses) {
+          final ip = addr.address;
+
+          // 1. لو لقى آي بي الهوتسبوت بتاع أندرويد (أعلى أولوية)
+          if (ip.startsWith('192.168.43.')) {
+            return ip;
+          }
+
+          // 2. لو لقى آي بي راوتر عادي (192.168.x.x)
+          if (ip.startsWith('192.168.')) {
+            wifiIp = ip;
+          } else if (ip.startsWith('10.') || ip.startsWith('172.')) {
+            anyLocalIp = ip;
           }
         }
       }
-    } catch (_) {}
 
-    return null;
+      // إرجاع الأفضل بالترتيب
+      if (wifiIp != null) return wifiIp;
+      if (anyLocalIp != null) return anyLocalIp;
+
+    } catch (e) {
+      // لو حصل أي خطأ
+    }
+
+    // لو الهوتسبوت شغال بس النظام لسه مسجلوش في Dart، الافتراضي هو:
+    return '192.168.43.1';
   }
 }
