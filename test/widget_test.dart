@@ -58,7 +58,7 @@ void main() {
     expect(find.text('No files shared yet'), findsOneWidget);
   });
 
-  testWidgets('HomeScreen toggle server updates UI', (WidgetTester tester) async {
+  testWidgets('HomeScreen toggle server updates UI and displays PIN', (WidgetTester tester) async {
     final storageService = FileStorageService();
     final server = EmbeddedServer(htmlContentOverride: '<html></html>', storageService: storageService);
 
@@ -81,6 +81,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('Server Active'), findsOneWidget);
+    expect(find.text('PIN: ${server.sessionManager.pin}'), findsOneWidget);
     expect(find.byIcon(Icons.copy), findsOneWidget);
 
     // Toggle switch off
