@@ -15,6 +15,7 @@ class FileStorageService {
   final Directory? storageDirectoryOverride;
   final int maxUploadBytes;
   final List<SharedFile> _sharedFiles = [];
+  final List<SharedFile> _receivedFiles = [];
 
   FileStorageService({
     this.storageDirectoryOverride,
@@ -22,31 +23,81 @@ class FileStorageService {
   });
 
   List<SharedFile> get sharedFiles => List.unmodifiable(_sharedFiles);
+  List<SharedFile> get receivedFiles => List.unmodifiable(_receivedFiles);
 
-  Future<Directory> getStorageDirectory() async {
+  String getCategoryForFilename(String filename) {
+    final dotIdx = filename.lastIndexOf('.');
+    final ext = dotIdx != -1 ? filename.substring(dotIdx + 1).toLowerCase() : '';
+    switch (ext) {
+      case 'mp4':
+      case 'mkv':
+      case 'avi':
+      case 'mov':
+      case '3gp':
+        return 'Videos';
+      case 'jpg':
+      case 'jpeg':
+      case 'png':
+      case 'gif':
+      case 'webp':
+        return 'Images';
+      case 'apk':
+      case 'xapk':
+        return 'Apps';
+      case 'mp3':
+      case 'wav':
+      case 'm4a':
+      case 'ogg':
+        return 'Audio';
+      default:
+        return 'Documents';
+    }
+  }
+
+  Future<Directory> getStorageDirectory([String? categorySubfolder]) async {
     if (storageDirectoryOverride != null) {
-      if (!await storageDirectoryOverride!.exists()) {
-        await storageDirectoryOverride!.create(recursive: true);
+      final target = categorySubfolder != null
+          ? Directory('${storageDirectoryOverride!.path}/$categorySubfolder')
+          : storageDirectoryOverride!;
+      if (!await target.exists()) {
+        await target.create(recursive: true);
       }
-      return storageDirectoryOverride!;
+      return target;
     }
 
-    try {
-      final dir = await getApplicationDocumentsDirectory();
-      final uploadDir = Directory('${dir.path}/libreshare_uploads');
-      if (!await uploadDir.exists()) {
-        await uploadDir.create(recursive: true);
+    Directory baseDir;
+    if (Platform.isAndroid) {
+      try {
+        baseDir = Directory('/storage/emulated/0/Download/LibreShare');
+        if (!await baseDir.exists()) {
+          await baseDir.create(recursive: true);
+        }
+      } catch (_) {
+        try {
+          final docs = await getApplicationDocumentsDirectory();
+          baseDir = Directory('${docs.path}/LibreShare');
+        } catch (_) {
+          final tempDir = Directory.systemTemp.createTempSync('libreshare_docs_');
+          baseDir = Directory('${tempDir.path}/LibreShare');
+        }
       }
-      return uploadDir;
-    } catch (_) {
-      // Fallback for test environments where path_provider channel is unmocked
-      final tempDir = Directory.systemTemp.createTempSync('libreshare_docs_');
-      final uploadDir = Directory('${tempDir.path}/libreshare_uploads');
-      if (!await uploadDir.exists()) {
-        await uploadDir.create(recursive: true);
+    } else {
+      try {
+        final docs = await getApplicationDocumentsDirectory();
+        baseDir = Directory('${docs.path}/LibreShare');
+      } catch (_) {
+        final tempDir = Directory.systemTemp.createTempSync('libreshare_docs_');
+        baseDir = Directory('${tempDir.path}/LibreShare');
       }
-      return uploadDir;
     }
+
+    final targetDir = categorySubfolder != null
+        ? Directory('${baseDir.path}/$categorySubfolder')
+        : baseDir;
+    if (!await targetDir.exists()) {
+      await targetDir.create(recursive: true);
+    }
+    return targetDir;
   }
 
   SharedFile? getFileById(String id) {
@@ -90,9 +141,10 @@ class FileStorageService {
     int? maxBytes,
   }) async {
     final limit = maxBytes ?? maxUploadBytes;
-    final storageDir = await getStorageDirectory();
-    final fileId = SharedFile.generateId();
     final safeName = sanitizeFilename(filename);
+    final category = getCategoryForFilename(safeName);
+    final storageDir = await getStorageDirectory(category);
+    final fileId = SharedFile.generateId();
     final partFilePath = '${storageDir.path}/$fileId.part';
     final finalFilePath = '${storageDir.path}/$fileId-$safeName';
 
@@ -126,6 +178,9 @@ class FileStorageService {
       );
 
       addSharedFile(sharedFile);
+      _receivedFiles.removeWhere((f) => f.id == sharedFile.id);
+      _receivedFiles.add(sharedFile);
+
       return sharedFile;
     } catch (e) {
       try {
@@ -145,6 +200,7 @@ class FileStorageService {
     if (index != -1) {
       final file = _sharedFiles[index];
       _sharedFiles.removeAt(index);
+      _receivedFiles.removeWhere((f) => f.id == id);
       if (file.ownedByApp) {
         try {
           final diskFile = File(file.filePath);
@@ -168,5 +224,6 @@ class FileStorageService {
       }
     }
     _sharedFiles.clear();
+    _receivedFiles.clear();
   }
 }

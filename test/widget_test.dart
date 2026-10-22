@@ -22,6 +22,7 @@ void main() {
     expect(find.text('LibreShare'), findsOneWidget);
     expect(find.text('Server Stopped'), findsOneWidget);
     expect(find.text('No files shared yet'), findsOneWidget);
+    expect(find.text('No files received yet'), findsOneWidget);
   });
 
   testWidgets('HomeScreen lists shared files and allows removal', (WidgetTester tester) async {
@@ -73,9 +74,11 @@ void main() {
 
     expect(find.text('Server Stopped'), findsOneWidget);
 
-    // Toggle switch on
+    // Toggle server switch on (second Switch in the UI, first is Hotspot Switch)
+    final serverSwitch = find.byType(Switch).at(1);
+
     await tester.runAsync(() async {
-      await tester.tap(find.byType(Switch));
+      await tester.tap(serverSwitch);
       await Future.delayed(const Duration(milliseconds: 100));
     });
     await tester.pump();
@@ -86,7 +89,7 @@ void main() {
 
     // Toggle switch off
     await tester.runAsync(() async {
-      await tester.tap(find.byType(Switch));
+      await tester.tap(serverSwitch);
       await Future.delayed(const Duration(milliseconds: 100));
     });
     await tester.pump();
