@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -26,7 +27,9 @@ class _HomeScreenState extends State<HomeScreen> {
   late final FileStorageService _storageService;
   late final EmbeddedServer _server;
   bool _isServerStarting = false;
-  String? _serverUrl;
+  String? _serverBaseUrl;
+  Timer? _approvalPollTimer;
+  final Set<String> _promptedRequests = {};
 
   @override
   void initState() {
@@ -37,19 +40,87 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _stopApprovalPolling();
     if (widget.serverOverride == null && _server.isRunning) {
       _server.stop();
     }
     super.dispose();
   }
 
+  void _startApprovalPolling() {
+    _approvalPollTimer?.cancel();
+    _approvalPollTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      _checkPendingApprovalRequests();
+    });
+  }
+
+  void _stopApprovalPolling() {
+    _approvalPollTimer?.cancel();
+    _approvalPollTimer = null;
+  }
+
+  void _checkPendingApprovalRequests() {
+    if (!_server.isRunning) return;
+    final pending = _server.sessionManager.pendingRequestIds;
+    for (final requestId in pending) {
+      if (!_promptedRequests.contains(requestId)) {
+        _promptedRequests.add(requestId);
+        _showApprovalDialog(requestId);
+        break;
+      }
+    }
+  }
+
+  Future<void> _showApprovalDialog(String requestId) async {
+    if (!mounted) return;
+
+    final allowed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1E1E2E),
+          title: const Text(
+            'Connection Request',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
+          content: const Text(
+            'A new device wants to connect. Allow access?',
+            style: TextStyle(color: Colors.white70),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Deny', style: TextStyle(color: Colors.redAccent)),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF8A2BE2),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Allow'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (allowed == true) {
+      _server.sessionManager.approveRequest(requestId);
+    } else {
+      _server.sessionManager.rejectRequest(requestId);
+    }
+  }
+
   Future<void> _toggleServer() async {
     if (_isServerStarting) return;
 
     if (_server.isRunning) {
+      _stopApprovalPolling();
       await _server.stop();
       setState(() {
-        _serverUrl = null;
+        _serverBaseUrl = null;
       });
     } else {
       setState(() {
@@ -58,11 +129,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
       try {
         await _server.start();
-        final ip = await NetworkHelper.getLocalIpAddress() ?? '127.0.0.1';
+        final ip = await NetworkHelper.getLocalIpAddress();
         final port = _server.actualPort ?? 8080;
         setState(() {
-          _serverUrl = 'http://$ip:$port';
+          _serverBaseUrl = 'http://$ip:$port';
         });
+        _startApprovalPolling();
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -89,13 +161,12 @@ class _HomeScreenState extends State<HomeScreen> {
             if (path != null && path.isNotEmpty) {
               final fileObj = File(path);
               final size = fileObj.existsSync() ? fileObj.lengthSync() : 0;
-              final fileId = '${DateTime.now().millisecondsSinceEpoch}_${pickedFile.name.hashCode.abs()}';
 
               final sharedFile = SharedFile.fromPath(
-                id: fileId,
                 filePath: path,
                 customName: pickedFile.name,
                 customSize: size,
+                ownedByApp: false,
               );
               _storageService.addSharedFile(sharedFile);
             }
@@ -125,9 +196,16 @@ class _HomeScreenState extends State<HomeScreen> {
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
   }
 
+  String? get _fullPairingUrl {
+    if (_serverBaseUrl == null) return null;
+    final token = _server.sessionManager.pairingToken;
+    return '$_serverBaseUrl/?t=$token';
+  }
+
   @override
   Widget build(BuildContext context) {
     final sharedFiles = _storageService.sharedFiles;
+    final pairingUrl = _fullPairingUrl;
 
     return Scaffold(
       appBar: AppBar(
@@ -191,8 +269,34 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: CircularProgressIndicator(strokeWidth: 2.5),
                       ),
                     ],
-                    if (_server.isRunning && _serverUrl != null) ...[
-                      const SizedBox(height: 20),
+                    if (_server.isRunning && pairingUrl != null) ...[
+                      const SizedBox(height: 16),
+                      // Prominent PIN Display
+                      Container(
+                        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF8A2BE2).withAlpha(50),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFF8A2BE2), width: 1.5),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.lock, color: Colors.white70, size: 20),
+                            const SizedBox(width: 8),
+                            Text(
+                              'PIN: ${_server.sessionManager.pin}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 22,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 3,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
                       Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
@@ -205,10 +309,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             const SizedBox(width: 8),
                             Expanded(
                               child: SelectableText(
-                                _serverUrl!,
+                                pairingUrl,
                                 style: const TextStyle(
                                   color: Colors.white,
-                                  fontSize: 16,
+                                  fontSize: 14,
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),
@@ -216,7 +320,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             IconButton(
                               icon: const Icon(Icons.copy, color: Colors.white70),
                               onPressed: () {
-                                Clipboard.setData(ClipboardData(text: _serverUrl!));
+                                Clipboard.setData(ClipboardData(text: pairingUrl));
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(content: Text('URL copied to clipboard')),
                                 );
@@ -225,7 +329,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           ],
                         ),
                       ),
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 16),
                       Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
@@ -233,7 +337,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: QrImageView(
-                          data: _serverUrl!,
+                          data: pairingUrl,
                           version: QrVersions.auto,
                           size: 180.0,
                           backgroundColor: Colors.white,
@@ -241,7 +345,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       const SizedBox(height: 8),
                       const Text(
-                        'Scan QR code on receiver device',
+                        'Scan QR code on receiver device for instant access',
                         style: TextStyle(color: Colors.white54, fontSize: 12),
                       ),
                     ],

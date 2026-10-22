@@ -15,6 +15,7 @@
       --hover-bg: #2a2a2a;
       --progress-bg: #333333;
       --progress-fill: #bb86fc;
+      --error-color: #cf6679;
     }
 
     * {
@@ -54,6 +55,112 @@
       display: flex;
       flex-direction: column;
       gap: 24px;
+    }
+
+    /* Lock Screen Styles */
+    .lock-screen {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      width: 100%;
+      max-width: 420px;
+      margin: 40px auto;
+    }
+
+    .lock-card {
+      background-color: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 28px 24px;
+      text-align: center;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    }
+
+    .lock-card h2 {
+      font-size: 1.2rem;
+      margin-bottom: 16px;
+      color: var(--accent-color);
+    }
+
+    .pin-input-group {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .pin-input {
+      width: 140px;
+      height: 48px;
+      font-size: 1.5rem;
+      text-align: center;
+      letter-spacing: 8px;
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      outline: none;
+    }
+
+    .pin-input:focus {
+      border-color: var(--accent-color);
+    }
+
+    .error-msg {
+      color: var(--error-color);
+      font-size: 0.85rem;
+      margin-top: 8px;
+      display: none;
+    }
+
+    .divider {
+      display: flex;
+      align-items: center;
+      text-align: center;
+      color: #666;
+      font-size: 0.85rem;
+      margin: 8px 0;
+    }
+
+    .divider::before, .divider::after {
+      content: '';
+      flex: 1;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .divider span {
+      padding: 0 10px;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid rgba(255, 255, 255, 0.2);
+      border-radius: 50%;
+      border-top-color: var(--accent-color);
+      animation: spin 1s ease-in-out infinite;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .approval-status {
+      margin-top: 12px;
+      font-size: 0.9rem;
+      color: #aaa;
+      display: none;
+    }
+
+    /* App Content Styles */
+    .app-content {
+      display: none;
+      flex-direction: column;
+      gap: 24px;
+      width: 100%;
     }
 
     .drop-zone {
@@ -187,17 +294,34 @@
       background-color: var(--accent-color);
       color: #121212;
       border: none;
-      padding: 8px 16px;
+      padding: 10px 18px;
       border-radius: 6px;
       font-weight: 600;
       cursor: pointer;
       text-decoration: none;
-      transition: opacity 0.2s ease;
+      transition: opacity 0.2s ease, background-color 0.2s ease;
       flex-shrink: 0;
     }
 
     .btn:hover {
       opacity: 0.9;
+    }
+
+    .btn:disabled {
+      background-color: #444;
+      color: #888;
+      cursor: not-allowed;
+    }
+
+    .btn-secondary {
+      background-color: transparent;
+      border: 1px solid var(--accent-color);
+      color: var(--accent-color);
+      width: 100%;
+    }
+
+    .btn-secondary:hover {
+      background-color: rgba(187, 134, 252, 0.1);
     }
   </style>
 </head>
@@ -205,40 +329,77 @@
   <header>
     <h1>LibreShare Web Transfer</h1>
   </header>
+
   <main>
-    <div class="drop-zone" id="drop-zone">
-      <p>Drag and drop files here</p>
-      <span>or click to browse from your device</span>
-      <input type="file" id="file-input" multiple />
+    <!-- Lock Screen Section -->
+    <div class="lock-screen" id="lock-screen">
+      <!-- Section A: PIN Unlock -->
+      <div class="lock-card">
+        <h2>Enter 4-Digit PIN shown on host device</h2>
+        <div class="pin-input-group">
+          <input type="text" id="pin-input" class="pin-input" maxlength="4" placeholder="••••" autocomplete="off" />
+        </div>
+        <button class="btn" id="unlock-btn" style="width: 100%;">Unlock</button>
+        <p class="error-msg" id="pin-error">Invalid PIN. Please try again.</p>
+      </div>
+
+      <div class="divider"><span>OR</span></div>
+
+      <!-- Section B: Request Approval -->
+      <div class="lock-card">
+        <button class="btn btn-secondary" id="request-approval-btn">Request Approval on Host Phone</button>
+        <div class="approval-status" id="approval-status">
+          <span class="spinner"></span>
+          <span id="approval-msg">Waiting for confirmation on host phone...</span>
+        </div>
+      </div>
     </div>
 
-    <section class="progress-section" id="progress-section">
-      <div class="progress-info">
-        <span id="progress-filename">Uploading...</span>
-        <span id="progress-percent">0%</span>
+    <!-- App Content Section -->
+    <div class="app-content" id="app-content">
+      <div class="drop-zone" id="drop-zone">
+        <p>Drag and drop files here</p>
+        <span>or click to browse from your device</span>
+        <input type="file" id="file-input" multiple />
       </div>
-      <div class="progress-bar-container">
-        <div class="progress-bar-fill" id="progress-bar-fill"></div>
-      </div>
-    </section>
 
-    <section class="file-list-section">
-      <div class="file-list-header">
-        <h2>Available Files</h2>
-        <button class="refresh-btn" id="refresh-btn">Refresh</button>
-      </div>
-      <ul class="file-list" id="file-list">
-        <li class="file-item">
-          <div class="file-info">
-            <span class="file-name">Loading shared files...</span>
-            <span class="file-meta">-</span>
-          </div>
-        </li>
-      </ul>
-    </section>
+      <section class="progress-section" id="progress-section">
+        <div class="progress-info">
+          <span id="progress-filename">Uploading...</span>
+          <span id="progress-percent">0%</span>
+        </div>
+        <div class="progress-bar-container">
+          <div class="progress-bar-fill" id="progress-bar-fill"></div>
+        </div>
+      </section>
+
+      <section class="file-list-section">
+        <div class="file-list-header">
+          <h2>Available Files</h2>
+          <button class="refresh-btn" id="refresh-btn">Refresh</button>
+        </div>
+        <ul class="file-list" id="file-list">
+          <li class="file-item">
+            <div class="file-info">
+              <span class="file-name">Loading shared files...</span>
+              <span class="file-meta">-</span>
+            </div>
+          </li>
+        </ul>
+      </section>
+    </div>
   </main>
 
   <script>
+    const lockScreen = document.getElementById('lock-screen');
+    const appContent = document.getElementById('app-content');
+    const pinInput = document.getElementById('pin-input');
+    const unlockBtn = document.getElementById('unlock-btn');
+    const pinError = document.getElementById('pin-error');
+    const requestApprovalBtn = document.getElementById('request-approval-btn');
+    const approvalStatus = document.getElementById('approval-status');
+    const approvalMsg = document.getElementById('approval-msg');
+
     const dropZone = document.getElementById('drop-zone');
     const fileInput = document.getElementById('file-input');
     const fileListEl = document.getElementById('file-list');
@@ -248,6 +409,19 @@
     const progressPercent = document.getElementById('progress-percent');
     const progressBarFill = document.getElementById('progress-bar-fill');
 
+    let pollInterval = null;
+
+    function showAppContent() {
+      if (pollInterval) clearInterval(pollInterval);
+      lockScreen.style.display = 'none';
+      appContent.style.display = 'flex';
+    }
+
+    function showLockScreen() {
+      lockScreen.style.display = 'flex';
+      appContent.style.display = 'none';
+    }
+
     function formatBytes(bytes) {
       if (bytes === 0 || !bytes) return '0 Bytes';
       const k = 1024;
@@ -256,11 +430,16 @@
       return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
 
-    async function fetchFiles() {
+    async function checkAuthAndFetchFiles() {
       try {
         const response = await fetch('/api/files');
+        if (response.status === 401) {
+          showLockScreen();
+          return;
+        }
         if (!response.ok) throw new Error('Failed to fetch files');
         const files = await response.json();
+        showAppContent();
         renderFileList(files);
       } catch (err) {
         console.error('Error fetching files:', err);
@@ -312,10 +491,75 @@
       });
     }
 
+    async function submitPin() {
+      const pin = pinInput.value.trim();
+      if (pin.length !== 4) {
+        pinError.textContent = 'PIN must be 4 digits.';
+        pinError.style.display = 'block';
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/auth/pin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin: pin })
+        });
+
+        if (response.ok) {
+          pinError.style.display = 'none';
+          checkAuthAndFetchFiles();
+        } else {
+          pinError.textContent = 'Invalid PIN. Please try again.';
+          pinError.style.display = 'block';
+        }
+      } catch (err) {
+        pinError.textContent = 'Connection error. Please try again.';
+        pinError.style.display = 'block';
+      }
+    }
+
+    async function requestApproval() {
+      requestApprovalBtn.disabled = true;
+      approvalStatus.style.display = 'block';
+      approvalMsg.textContent = 'Waiting for confirmation on host phone...';
+
+      try {
+        const response = await fetch('/api/auth/request-approval', { method: 'POST' });
+        if (!response.ok) throw new Error('Request failed');
+        const data = await response.json();
+        const requestId = data.requestId;
+
+        if (pollInterval) clearInterval(pollInterval);
+
+        pollInterval = setInterval(async () => {
+          try {
+            const pollRes = await fetch(`/api/auth/poll-approval?requestId=${requestId}`);
+            if (pollRes.ok) {
+              const pollData = await pollRes.json();
+              if (pollData.status === 'approved') {
+                clearInterval(pollInterval);
+                checkAuthAndFetchFiles();
+              } else if (pollData.status === 'rejected') {
+                clearInterval(pollInterval);
+                approvalMsg.textContent = 'Access rejected by host device.';
+                requestApprovalBtn.disabled = false;
+              }
+            }
+          } catch (e) {
+            console.error('Polling error:', e);
+          }
+        }, 1500);
+      } catch (err) {
+        approvalMsg.textContent = 'Error requesting approval.';
+        requestApprovalBtn.disabled = false;
+      }
+    }
+
     function uploadFiles(files) {
       if (!files || files.length === 0) return;
 
-      Array.from(files).forEach((file, index) => {
+      Array.from(files).forEach((file) => {
         const formData = new FormData();
         formData.append('file', file);
 
@@ -341,7 +585,7 @@
             setTimeout(() => {
               progressSection.style.display = 'none';
             }, 2000);
-            fetchFiles();
+            checkAuthAndFetchFiles();
           } else {
             progressFilename.textContent = `Upload failed for ${file.name}`;
           }
@@ -354,6 +598,13 @@
         xhr.send(formData);
       });
     }
+
+    unlockBtn.addEventListener('click', submitPin);
+    pinInput.addEventListener('keyup', (e) => {
+      if (e.key === 'Enter') submitPin();
+    });
+
+    requestApprovalBtn.addEventListener('click', requestApproval);
 
     dropZone.addEventListener('click', () => fileInput.click());
 
@@ -382,12 +633,11 @@
     });
 
     refreshBtn.addEventListener('click', () => {
-      fetchFiles();
+      checkAuthAndFetchFiles();
     });
 
-    // Initial fetch on load & periodic refresh every 5 seconds
-    fetchFiles();
-    setInterval(fetchFiles, 5000);
+    // Check auth state initially
+    checkAuthAndFetchFiles();
   </script>
 </body>
 </html>

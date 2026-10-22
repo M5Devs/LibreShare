@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:mime/mime.dart';
 
 class SharedFile {
@@ -7,6 +8,7 @@ class SharedFile {
   final String type;
   final String filePath;
   final DateTime uploadedAt;
+  final bool ownedByApp;
 
   SharedFile({
     required this.id,
@@ -14,24 +16,33 @@ class SharedFile {
     required this.size,
     required this.type,
     required this.filePath,
+    this.ownedByApp = false,
     DateTime? uploadedAt,
   }) : uploadedAt = uploadedAt ?? DateTime.now();
 
+  static String generateId() {
+    final random = Random.secure();
+    final values = List<int>.generate(16, (_) => random.nextInt(256)); // 16 bytes = 128 bits
+    return values.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  }
+
   factory SharedFile.fromPath({
-    required String id,
+    String? id,
     required String filePath,
     String? customName,
     int? customSize,
     String? customType,
+    bool ownedByApp = false,
   }) {
     final name = customName ?? filePath.split('/').last.split('\\').last;
     final mimeType = customType ?? lookupMimeType(filePath) ?? 'application/octet-stream';
     return SharedFile(
-      id: id,
+      id: id ?? generateId(),
       name: name,
       size: customSize ?? 0,
       type: mimeType,
       filePath: filePath,
+      ownedByApp: ownedByApp,
     );
   }
 
@@ -42,6 +53,7 @@ class SharedFile {
       'size': size,
       'type': type,
       'uploadedAt': uploadedAt.toIso8601String(),
+      'ownedByApp': ownedByApp,
     };
   }
 }
