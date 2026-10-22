@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import '../../core/network/hotspot_manager.dart';
 import '../../core/network/network_helper.dart';
 import '../../core/server/embedded_server.dart';
 import '../../core/server/file_storage_service.dart';
@@ -27,8 +28,12 @@ class _HomeScreenState extends State<HomeScreen> {
   late final FileStorageService _storageService;
   late final EmbeddedServer _server;
   bool _isServerStarting = false;
+  bool _isHotspotActive = false;
+  String? _hotspotSsid;
+  String? _hotspotPassword;
   String? _serverBaseUrl;
   Timer? _approvalPollTimer;
+  Timer? _uiRefreshTimer;
   final Set<String> _promptedRequests = {};
 
   @override
@@ -36,10 +41,17 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _storageService = widget.storageServiceOverride ?? FileStorageService();
     _server = widget.serverOverride ?? EmbeddedServer(storageService: _storageService);
+
+    _uiRefreshTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) {
+        setState(() {});
+      }
+    });
   }
 
   @override
   void dispose() {
+    _uiRefreshTimer?.cancel();
     _stopApprovalPolling();
     if (widget.serverOverride == null && _server.isRunning) {
       _server.stop();
@@ -113,14 +125,73 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _toggleHotspotMode(bool enable) async {
+    if (_isServerStarting) return;
+
+    setState(() {
+      _isServerStarting = true;
+    });
+
+    try {
+      if (enable) {
+        final hotspotInfo = await HotspotManager.startHotspot();
+        if (hotspotInfo != null) {
+          _hotspotSsid = hotspotInfo['ssid'];
+          _hotspotPassword = hotspotInfo['password'];
+          _isHotspotActive = true;
+        }
+
+        if (!_server.isRunning) {
+          await _server.start();
+        }
+        final ip = hotspotInfo?['ip'] ?? await NetworkHelper.getLocalIpAddress();
+        final port = _server.actualPort ?? 8080;
+        setState(() {
+          _serverBaseUrl = 'http://$ip:$port';
+        });
+        _startApprovalPolling();
+      } else {
+        await HotspotManager.stopHotspot();
+        _stopApprovalPolling();
+        if (_server.isRunning) {
+          await _server.stop();
+        }
+        setState(() {
+          _isHotspotActive = false;
+          _hotspotSsid = null;
+          _hotspotPassword = null;
+          _serverBaseUrl = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Hotspot action failed: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isServerStarting = false;
+        });
+      }
+    }
+  }
+
   Future<void> _toggleServer() async {
     if (_isServerStarting) return;
 
     if (_server.isRunning) {
       _stopApprovalPolling();
       await _server.stop();
+      if (_isHotspotActive) {
+        await HotspotManager.stopHotspot();
+      }
       setState(() {
         _serverBaseUrl = null;
+        _isHotspotActive = false;
+        _hotspotSsid = null;
+        _hotspotPassword = null;
       });
     } else {
       setState(() {
@@ -202,9 +273,37 @@ class _HomeScreenState extends State<HomeScreen> {
     return '$_serverBaseUrl/?t=$token';
   }
 
+  Widget _getCategoryIcon(String category) {
+    switch (category) {
+      case 'Videos':
+        return const Icon(Icons.video_library, color: Colors.purpleAccent);
+      case 'Images':
+        return const Icon(Icons.image, color: Colors.blueAccent);
+      case 'Apps':
+        return const Icon(Icons.android, color: Colors.greenAccent);
+      case 'Audio':
+        return const Icon(Icons.audiotrack, color: Colors.orangeAccent);
+      default:
+        return const Icon(Icons.insert_drive_file, color: Colors.amberAccent);
+    }
+  }
+
+  String _getDisplayFolderPath(String filePath) {
+    final idx = filePath.indexOf('Download/LibreShare/');
+    if (idx != -1) {
+      return filePath.substring(idx);
+    }
+    final libreIdx = filePath.indexOf('LibreShare/');
+    if (libreIdx != -1) {
+      return 'Download/${filePath.substring(libreIdx)}';
+    }
+    return filePath;
+  }
+
   @override
   Widget build(BuildContext context) {
     final sharedFiles = _storageService.sharedFiles;
+    final receivedFiles = _storageService.receivedFiles;
     final pairingUrl = _fullPairingUrl;
 
     return Scaffold(
@@ -221,6 +320,72 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Hotspot Mode Card / Switch
+            Card(
+              elevation: 4,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              color: const Color(0xFF1E1E2E),
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.wifi_tethering, color: Color(0xFF8A2BE2)),
+                            SizedBox(width: 8),
+                            Text(
+                              'Offline Hotspot Mode',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                        Switch(
+                          value: _isHotspotActive,
+                          onChanged: _isServerStarting ? null : (val) => _toggleHotspotMode(val),
+                          activeTrackColor: const Color(0xFF8A2BE2),
+                        ),
+                      ],
+                    ),
+                    if (_isHotspotActive && _hotspotSsid != null) ...[
+                      const Divider(color: Colors.white10),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('SSID:', style: TextStyle(color: Colors.white70)),
+                          SelectableText(
+                            _hotspotSsid!,
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      if (_hotspotPassword != null && _hotspotPassword!.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text('Password:', style: TextStyle(color: Colors.white70)),
+                            SelectableText(
+                              _hotspotPassword!,
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+
             // Server Status Card
             Card(
               elevation: 4,
@@ -443,6 +608,117 @@ class _HomeScreenState extends State<HomeScreen> {
                         icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
                         onPressed: () => _removeFile(file.id),
                         tooltip: 'Unshare File',
+                      ),
+                    ),
+                  );
+                },
+              ),
+
+            const SizedBox(height: 24),
+
+            // Received Files Section
+            const Text(
+              'Received Files',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            if (receivedFiles.isEmpty)
+              Container(
+                padding: const EdgeInsets.all(32),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E1E2E).withAlpha(128),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: const Column(
+                  children: [
+                    Icon(Icons.download_done, size: 48, color: Colors.white38),
+                    SizedBox(height: 12),
+                    Text(
+                      'No files received yet',
+                      style: TextStyle(color: Colors.white54, fontSize: 16),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      'Files sent to this device will appear here.',
+                      style: TextStyle(color: Colors.white38, fontSize: 12),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              )
+            else
+              ListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: receivedFiles.length,
+                itemBuilder: (context, index) {
+                  final file = receivedFiles[index];
+                  final category = _storageService.getCategoryForFilename(file.name);
+                  final folderPath = _getDisplayFolderPath(file.filePath);
+
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    color: const Color(0xFF2A2A3D),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: Colors.white10,
+                        child: _getCategoryIcon(category),
+                      ),
+                      title: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              file.name,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF8A2BE2).withAlpha(100),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              category,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _formatFileSize(file.size),
+                            style: const TextStyle(color: Colors.white54, fontSize: 12),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            folderPath,
+                            style: const TextStyle(color: Colors.white38, fontSize: 11),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
                       ),
                     ),
                   );
