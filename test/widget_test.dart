@@ -3,9 +3,25 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:libreshare/core/server/embedded_server.dart';
 import 'package:libreshare/core/server/file_storage_service.dart';
 import 'package:libreshare/core/server/shared_file.dart';
+import 'package:libreshare/core/utils/permission_helper.dart';
 import 'package:libreshare/features/home/home_screen.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 void main() {
+  setUp(() {
+    PermissionHelper.isAndroidOverride = false;
+    PermissionHelper.androidSdkVersionOverride = 33;
+    PermissionHelper.checkPermissionOverride = (perm) async => PermissionStatus.granted;
+    PermissionHelper.checkServiceStatusOverride = (perm) async => ServiceStatus.enabled;
+  });
+
+  tearDown(() {
+    PermissionHelper.isAndroidOverride = null;
+    PermissionHelper.androidSdkVersionOverride = null;
+    PermissionHelper.checkPermissionOverride = null;
+    PermissionHelper.checkServiceStatusOverride = null;
+  });
+
   testWidgets('HomeScreen displays initial state correctly', (WidgetTester tester) async {
     final storageService = FileStorageService();
     final server = EmbeddedServer(storageService: storageService);

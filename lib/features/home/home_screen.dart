@@ -1,3 +1,4 @@
+import '../../core/utils/permission_helper.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
@@ -128,6 +129,13 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _toggleHotspotMode(bool enable) async {
     if (_isServerStarting) return;
 
+    if (enable) {
+      final granted = await PermissionHelper.requestHotspotPermissions(context);
+      if (!granted) {
+        return;
+      }
+    }
+
     setState(() {
       _isServerStarting = true;
     });
@@ -223,6 +231,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _pickFiles() async {
+    final granted = await PermissionHelper.requestStoragePermissions(context);
+    if (!granted) return;
+
     try {
       final List<PlatformFile> pickedFiles = await FilePicker.pickFiles();
       if (pickedFiles.isNotEmpty) {
