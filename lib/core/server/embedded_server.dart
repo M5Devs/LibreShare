@@ -1,3 +1,4 @@
+import 'package:wakelock_plus/wakelock_plus.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/services.dart' show rootBundle;
@@ -182,6 +183,101 @@ class EmbeddedServer {
       );
     });
 
+
+    router.get('/eruda.min.js', (Request request) async {
+      try {
+        String scriptContent = '';
+        try {
+          scriptContent = await rootBundle.loadString('assets/web/eruda.min.js');
+        } catch (_) {}
+        if (scriptContent.isEmpty) {
+          final file = File('assets/web/eruda.min.js');
+          if (await file.exists()) {
+            scriptContent = await file.readAsString();
+          }
+        }
+        if (scriptContent.isNotEmpty) {
+          return Response.ok(
+            scriptContent,
+            headers: {'content-type': 'application/javascript; charset=utf-8'},
+          );
+        }
+        return Response.notFound('eruda.min.js not found');
+      } catch (e) {
+        return Response.notFound('eruda.min.js not found');
+      }
+    });
+
+    router.get('/api/upload/status', (Request request) async {
+      final rawFilename = request.url.queryParameters['filename'] ??
+          request.url.queryParameters['uploadId'] ??
+          '';
+      var filename = rawFilename;
+      try {
+        filename = Uri.decodeComponent(rawFilename);
+      } catch (_) {}
+      final offset = await storageService.getUploadOffset(filename: filename);
+      return Response.ok(
+        jsonEncode({'offset': offset}),
+        headers: {'content-type': 'application/json'},
+      );
+    });
+
+    router.post('/api/upload/chunk', (Request request) async {
+      final rawFilename = request.headers['x-file-name'] ??
+          request.url.queryParameters['filename'] ??
+          '';
+      var filename = rawFilename;
+      try {
+        filename = Uri.decodeComponent(rawFilename);
+      } catch (_) {}
+
+      final chunkOffset = int.tryParse(request.headers['x-chunk-offset'] ?? '0') ?? 0;
+      final totalBytes = int.tryParse(request.headers['x-total-bytes'] ?? '0') ?? 0;
+
+      if (filename.isEmpty) {
+        return Response.badRequest(
+          body: jsonEncode({'error': 'Missing X-File-Name header or filename parameter'}),
+          headers: {'content-type': 'application/json'},
+        );
+      }
+
+      try {
+        final result = await storageService.appendChunk(
+          filename: filename,
+          stream: request.read(),
+          totalBytes: totalBytes,
+          chunkOffset: chunkOffset,
+        );
+        return Response.ok(
+          jsonEncode(result),
+          headers: {'content-type': 'application/json'},
+        );
+      } catch (e) {
+        return Response.internalServerError(
+          body: jsonEncode({'error': 'Chunk upload failed: '}),
+          headers: {'content-type': 'application/json'},
+        );
+      }
+    });
+
+    router.post('/api/upload/cancel', (Request request) async {
+      final rawFilename = request.headers['x-file-name'] ??
+          request.url.queryParameters['filename'] ??
+          request.url.queryParameters['uploadId'] ??
+          '';
+      var filename = rawFilename;
+      try {
+        filename = Uri.decodeComponent(rawFilename);
+      } catch (_) {}
+
+      await storageService.cancelUpload(filename: filename);
+      return Response.ok(
+        jsonEncode({'status': 'cancelled'}),
+        headers: {'content-type': 'application/json'},
+      );
+    });
+
     router.post('/api/upload', (Request request) async {
       final contentTypeHeader = request.headers['content-type'];
       if (contentTypeHeader == null) {
@@ -281,7 +377,7 @@ class EmbeddedServer {
         return (Request request) async {
           final path = request.url.path;
 
-          if (path == '' || path == '/') {
+          if (path == '' || path == '/' || path == 'eruda.min.js') {
             return innerHandler(request);
           }
 
@@ -344,10 +440,17 @@ class EmbeddedServer {
         rethrow;
       }
     }
+        try {
+      await WakelockPlus.enable();
+    } catch (_) {}
+
     return _server!;
   }
 
   Future<void> stop() async {
+    try {
+      await WakelockPlus.disable();
+    } catch (_) {}
     await _server?.close(force: true);
     _server = null;
   }

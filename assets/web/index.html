@@ -323,7 +323,70 @@
     .btn-secondary:hover {
       background-color: rgba(187, 134, 252, 0.1);
     }
-  </style>
+
+    .upload-card {
+      background-color: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .upload-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .upload-card-title {
+      font-weight: 600;
+      font-size: 0.95rem;
+      color: var(--text-color);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 60%;
+    }
+
+    .upload-card-meta {
+      font-size: 0.85rem;
+      color: #aaa;
+    }
+
+    .upload-card-controls {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn-small {
+      padding: 6px 12px;
+      font-size: 0.85rem;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      font-weight: 500;
+    }
+
+    .btn-pause {
+      background-color: #f39c12;
+      color: #fff;
+    }
+
+    .btn-resume {
+      background-color: #2ecc71;
+      color: #fff;
+    }
+
+    .btn-cancel {
+      background-color: #e74c3c;
+      color: #fff;
+    }
+
+</style>
+<script src="/eruda.min.js"></script>
+  <script>if (window.eruda) eruda.init();</script>
 </head>
 <body>
   <header>
@@ -363,14 +426,9 @@
         <input type="file" id="file-input" multiple />
       </div>
 
-      <section class="progress-section" id="progress-section">
-        <div class="progress-info">
-          <span id="progress-filename">Uploading...</span>
-          <span id="progress-percent">0%</span>
-        </div>
-        <div class="progress-bar-container">
-          <div class="progress-bar-fill" id="progress-bar-fill"></div>
-        </div>
+      <section class="progress-section" id="progress-section" style="display: none;">
+        <h2 style="font-size: 1.1rem; color: var(--text-color); margin-bottom: 8px;">Active Uploads</h2>
+        <div id="upload-cards-container" style="display: flex; flex-direction: column; gap: 12px; width: 100%;"></div>
       </section>
 
       <section class="file-list-section">
@@ -556,48 +614,289 @@
       }
     }
 
+
+    const CHUNK_SIZE = 2 * 1024 * 1024; // 2 MiB
+    const uploadTasks = new Map();
+
+    class UploadTask {
+      constructor(file) {
+        this.file = file;
+        this.uploadId = 'up_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        this.filename = file.name;
+        this.totalBytes = file.size;
+        this.currentOffset = 0;
+        this.status = 'uploading'; // 'uploading' | 'paused' | 'failed' | 'completed' | 'cancelled'
+        this.retryCount = 0;
+        this.currentXhr = null;
+        this.lastTime = Date.now();
+        this.lastBytes = 0;
+        this.speedStr = '0 B/s';
+
+        this.createCardElement();
+      }
+
+      createCardElement() {
+        const container = document.getElementById('upload-cards-container');
+        document.getElementById('progress-section').style.display = 'block';
+
+        this.card = document.createElement('div');
+        this.card.className = 'upload-card';
+        this.card.innerHTML = `
+          <div class="upload-card-header">
+            <span class="upload-card-title" title="${this.filename}">${this.filename}</span>
+            <div class="upload-card-controls">
+              <button class="btn-small btn-pause" id="btn-toggle-${this.uploadId}">Pause ⏸️</button>
+              <button class="btn-small btn-cancel" id="btn-cancel-${this.uploadId}">Cancel ❌</button>
+            </div>
+          </div>
+          <div class="upload-card-meta">
+            <span id="meta-size-${this.uploadId}">0 B / ${formatBytes(this.totalBytes)}</span> •
+            <span id="meta-speed-${this.uploadId}">0 B/s</span>
+          </div>
+          <div class="progress-bar-container">
+            <div class="progress-bar-fill" id="bar-${this.uploadId}" style="width: 0%;"></div>
+          </div>
+          <div class="progress-info">
+            <span id="status-${this.uploadId}">Uploading...</span>
+            <span id="percent-${this.uploadId}">0%</span>
+          </div>
+        `;
+        container.appendChild(this.card);
+
+        this.toggleBtn = this.card.querySelector(`#btn-toggle-${this.uploadId}`);
+        this.cancelBtn = this.card.querySelector(`#btn-cancel-${this.uploadId}`);
+
+        this.toggleBtn.addEventListener('click', () => {
+          if (this.status === 'uploading') {
+            this.pause();
+          } else if (this.status === 'paused' || this.status === 'failed') {
+            this.resume();
+          }
+        });
+
+        this.cancelBtn.addEventListener('click', () => {
+          this.cancel();
+        });
+      }
+
+      updateUI() {
+        if (!this.card) return;
+        const percent = Math.min(100, Math.round((this.currentOffset / this.totalBytes) * 100)) || 0;
+        const bar = this.card.querySelector(`#bar-${this.uploadId}`);
+        const percentEl = this.card.querySelector(`#percent-${this.uploadId}`);
+        const sizeEl = this.card.querySelector(`#meta-size-${this.uploadId}`);
+        const speedEl = this.card.querySelector(`#meta-speed-${this.uploadId}`);
+        const statusEl = this.card.querySelector(`#status-${this.uploadId}`);
+
+        if (bar) bar.style.width = percent + '%';
+        if (percentEl) percentEl.textContent = percent + '%';
+        if (sizeEl) sizeEl.textContent = `${formatBytes(this.currentOffset)} / ${formatBytes(this.totalBytes)}`;
+        if (speedEl) speedEl.textContent = this.speedStr;
+
+        if (this.status === 'uploading') {
+          this.toggleBtn.textContent = 'Pause ⏸️';
+          this.toggleBtn.className = 'btn-small btn-pause';
+          this.toggleBtn.style.display = 'inline-block';
+          if (statusEl) statusEl.textContent = 'Uploading...';
+        } else if (this.status === 'paused' || this.status === 'failed') {
+          this.toggleBtn.textContent = 'Resume ▶️';
+          this.toggleBtn.className = 'btn-small btn-resume';
+          this.toggleBtn.style.display = 'inline-block';
+          if (statusEl) statusEl.textContent = this.status === 'failed' ? 'Failed (click Resume)' : 'Paused';
+        } else if (this.status === 'completed') {
+          this.toggleBtn.style.display = 'none';
+          if (statusEl) statusEl.textContent = 'Completed ✅';
+        }
+      }
+
+      async start() {
+        await this.syncOffset();
+        this.uploadLoop();
+      }
+
+      async syncOffset() {
+        try {
+          const res = await fetch(`/api/upload/status?uploadId=${encodeURIComponent(this.uploadId)}&filename=${encodeURIComponent(this.filename)}`);
+          if (res.ok) {
+            const data = await res.json();
+            this.currentOffset = data.offset || 0;
+          }
+        } catch (e) {
+          console.error('Error fetching upload status:', e);
+        }
+      }
+
+      async uploadLoop() {
+        this.lastTime = Date.now();
+        this.lastBytes = this.currentOffset;
+
+        while (this.currentOffset < this.totalBytes && this.status === 'uploading') {
+          const chunkEnd = Math.min(this.currentOffset + CHUNK_SIZE, this.totalBytes);
+          const chunk = this.file.slice(this.currentOffset, chunkEnd);
+          const success = await this.uploadChunkWithRetry(chunk, this.currentOffset, this.totalBytes);
+
+          if (!success) {
+            if (this.status === 'uploading') {
+              this.status = 'paused';
+              this.updateUI();
+            }
+            break;
+          }
+
+          this.currentOffset = chunkEnd;
+          this.retryCount = 0;
+          this.updateSpeed(this.currentOffset);
+          this.updateUI();
+        }
+
+        if (this.currentOffset >= this.totalBytes && this.status === 'uploading') {
+          this.status = 'completed';
+          this.updateUI();
+          checkAuthAndFetchFiles();
+          setTimeout(() => {
+            if (this.card && this.card.parentNode) {
+              this.card.parentNode.removeChild(this.card);
+            }
+            checkHideProgressSection();
+          }, 3000);
+        }
+      }
+
+      updateSpeed(bytesDone) {
+        const now = Date.now();
+        const duration = (now - this.lastTime) / 1000;
+        if (duration >= 0.5) {
+          const bytesDiff = bytesDone - this.lastBytes;
+          const speed = bytesDiff / duration;
+          this.speedStr = formatBytes(speed) + '/s';
+          this.lastTime = now;
+          this.lastBytes = bytesDone;
+        }
+      }
+
+      async uploadChunkWithRetry(chunk, offset, total) {
+        for (let attempt = 0; attempt <= 3; attempt++) {
+          if (this.status !== 'uploading') return false;
+
+          if (attempt > 0) {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            if (this.status !== 'uploading') return false;
+          }
+
+          const success = await this.sendChunkXhr(chunk, offset, total);
+          if (success) return true;
+        }
+        return false;
+      }
+
+      sendChunkXhr(chunk, offset, total) {
+        return new Promise((resolve) => {
+          const xhr = new XMLHttpRequest();
+          this.currentXhr = xhr;
+
+          xhr.open('POST', '/api/upload/chunk', true);
+          xhr.setRequestHeader('X-Upload-Id', this.uploadId);
+          xhr.setRequestHeader('X-Chunk-Offset', offset.toString());
+          xhr.setRequestHeader('X-Total-Bytes', total.toString());
+          xhr.setRequestHeader('X-File-Name', encodeURIComponent(this.filename));
+
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+              const currentLoaded = offset + e.loaded;
+              const percent = Math.min(100, Math.round((currentLoaded / total) * 100));
+              const bar = this.card.querySelector(`#bar-${this.uploadId}`);
+              const percentEl = this.card.querySelector(`#percent-${this.uploadId}`);
+              const sizeEl = this.card.querySelector(`#meta-size-${this.uploadId}`);
+              if (bar) bar.style.width = percent + '%';
+              if (percentEl) percentEl.textContent = percent + '%';
+              if (sizeEl) sizeEl.textContent = `${formatBytes(currentLoaded)} / ${formatBytes(total)}`;
+              this.updateSpeed(currentLoaded);
+            }
+          };
+
+          xhr.onload = () => {
+            this.currentXhr = null;
+            if (xhr.status === 200) {
+              resolve(true);
+            } else {
+              resolve(false);
+            }
+          };
+
+          xhr.onerror = () => {
+            this.currentXhr = null;
+            resolve(false);
+          };
+
+          xhr.onabort = () => {
+            this.currentXhr = null;
+            resolve(false);
+          };
+
+          xhr.send(chunk);
+        });
+      }
+
+      pause() {
+        this.status = 'paused';
+        if (this.currentXhr) {
+          this.currentXhr.abort();
+          this.currentXhr = null;
+        }
+        this.updateUI();
+      }
+
+      async resume() {
+        this.status = 'uploading';
+        this.retryCount = 0;
+        this.updateUI();
+        await this.syncOffset();
+        this.uploadLoop();
+      }
+
+      async cancel() {
+        this.status = 'cancelled';
+        if (this.currentXhr) {
+          this.currentXhr.abort();
+          this.currentXhr = null;
+        }
+
+        try {
+          await fetch('/api/upload/cancel', {
+            method: 'POST',
+            headers: {
+              'X-File-Name': encodeURIComponent(this.filename),
+              'X-Upload-Id': this.uploadId
+            }
+          });
+        } catch (e) {
+          console.error('Cancel request error:', e);
+        }
+
+        if (this.card && this.card.parentNode) {
+          this.card.parentNode.removeChild(this.card);
+        }
+        uploadTasks.delete(this.uploadId);
+        checkHideProgressSection();
+      }
+    }
+
+    function checkHideProgressSection() {
+      const container = document.getElementById('upload-cards-container');
+      if (!container || container.children.length === 0) {
+        document.getElementById('progress-section').style.display = 'none';
+      }
+    }
+
     function uploadFiles(files) {
       if (!files || files.length === 0) return;
-
       Array.from(files).forEach((file) => {
-        const formData = new FormData();
-        formData.append('file', file);
-
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', '/api/upload', true);
-
-        progressSection.style.display = 'flex';
-        progressFilename.textContent = `Uploading ${file.name}...`;
-        progressBarFill.style.width = '0%';
-        progressPercent.textContent = '0%';
-
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            const percent = Math.round((e.loaded / e.total) * 100);
-            progressBarFill.style.width = percent + '%';
-            progressPercent.textContent = percent + '%';
-          }
-        };
-
-        xhr.onload = () => {
-          if (xhr.status === 200) {
-            progressFilename.textContent = `Uploaded ${file.name} successfully!`;
-            setTimeout(() => {
-              progressSection.style.display = 'none';
-            }, 2000);
-            checkAuthAndFetchFiles();
-          } else {
-            progressFilename.textContent = `Upload failed for ${file.name}`;
-          }
-        };
-
-        xhr.onerror = () => {
-          progressFilename.textContent = `Error uploading ${file.name}`;
-        };
-
-        xhr.send(formData);
+        const task = new UploadTask(file);
+        uploadTasks.set(task.uploadId, task);
+        task.start();
       });
     }
+
 
     unlockBtn.addEventListener('click', submitPin);
     pinInput.addEventListener('keyup', (e) => {

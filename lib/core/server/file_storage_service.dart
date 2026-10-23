@@ -11,11 +11,29 @@ class MaxBytesExceededException implements Exception {
   String toString() => message;
 }
 
+class UploadProgress {
+  final String filename;
+  final int currentBytes;
+  final int totalBytes;
+  final double percent;
+  final bool isCompleted;
+
+  UploadProgress({
+    required this.filename,
+    required this.currentBytes,
+    required this.totalBytes,
+    required this.percent,
+    this.isCompleted = false,
+  });
+}
+
 class FileStorageService {
   final Directory? storageDirectoryOverride;
   final int maxUploadBytes;
   final List<SharedFile> _sharedFiles = [];
   final List<SharedFile> _receivedFiles = [];
+  final StreamController<UploadProgress?> _progressController =
+      StreamController<UploadProgress?>.broadcast();
 
   FileStorageService({
     this.storageDirectoryOverride,
@@ -24,6 +42,7 @@ class FileStorageService {
 
   List<SharedFile> get sharedFiles => List.unmodifiable(_sharedFiles);
   List<SharedFile> get receivedFiles => List.unmodifiable(_receivedFiles);
+  Stream<UploadProgress?> get progressStream => _progressController.stream;
 
   String getCategoryForFilename(String filename) {
     final dotIdx = filename.lastIndexOf('.');
@@ -163,6 +182,107 @@ class FileStorageService {
     }
   }
 
+  Future<int> getUploadOffset({required String filename}) async {
+    final safeName = sanitizeFilename(filename);
+    final category = getCategoryForFilename(safeName);
+    final storageDir = await getStorageDirectory(category);
+    final partFile = File('${storageDir.path}/$safeName.part');
+
+    if (await partFile.exists()) {
+      return await partFile.length();
+    }
+    return 0;
+  }
+
+  Future<Map<String, dynamic>> appendChunk({
+    required String filename,
+    required Stream<List<int>> stream,
+    required int totalBytes,
+    required int chunkOffset,
+  }) async {
+    final safeName = sanitizeFilename(filename);
+    final category = getCategoryForFilename(safeName);
+    final storageDir = await getStorageDirectory(category);
+    final partFilePath = '${storageDir.path}/$safeName.part';
+    final partFile = File(partFilePath);
+
+    final sink = partFile.openWrite(mode: FileMode.append);
+    try {
+      await sink.addStream(stream);
+      await sink.flush();
+      await sink.close();
+    } catch (e) {
+      try {
+        await sink.close();
+      } catch (_) {}
+      rethrow;
+    }
+
+    final currentBytes = await partFile.length();
+    final percent = totalBytes > 0 ? (currentBytes / totalBytes * 100).clamp(0.0, 100.0) : 100.0;
+
+    if (currentBytes >= totalBytes) {
+      final resolvedName = await _resolveUniqueFilename(storageDir, safeName);
+      final finalFilePath = '${storageDir.path}/$resolvedName';
+      final finalFile = await partFile.rename(finalFilePath);
+      final detectedMime = lookupMimeType(finalFile.path) ?? 'application/octet-stream';
+
+      final fileId = SharedFile.generateId();
+      final sharedFile = SharedFile(
+        id: fileId,
+        name: resolvedName,
+        size: currentBytes,
+        type: detectedMime,
+        filePath: finalFile.path,
+        ownedByApp: true,
+      );
+
+      addSharedFile(sharedFile);
+      _receivedFiles.removeWhere((f) => f.id == sharedFile.id);
+      _receivedFiles.add(sharedFile);
+
+      _progressController.add(UploadProgress(
+        filename: safeName,
+        currentBytes: totalBytes,
+        totalBytes: totalBytes,
+        percent: 100.0,
+        isCompleted: true,
+      ));
+
+      return {
+        'status': 'completed',
+        'file': sharedFile.toJson(),
+      };
+    } else {
+      _progressController.add(UploadProgress(
+        filename: safeName,
+        currentBytes: currentBytes,
+        totalBytes: totalBytes,
+        percent: percent,
+        isCompleted: false,
+      ));
+
+      return {
+        'status': 'in_progress',
+        'offset': currentBytes,
+      };
+    }
+  }
+
+  Future<void> cancelUpload({required String filename}) async {
+    final safeName = sanitizeFilename(filename);
+    final category = getCategoryForFilename(safeName);
+    final storageDir = await getStorageDirectory(category);
+    final partFile = File('${storageDir.path}/$safeName.part');
+
+    if (await partFile.exists()) {
+      try {
+        await partFile.delete();
+      } catch (_) {}
+    }
+    _progressController.add(null);
+  }
+
   Future<SharedFile> saveStream({
     required String filename,
     required Stream<List<int>> stream,
@@ -212,6 +332,14 @@ class FileStorageService {
       _receivedFiles.removeWhere((f) => f.id == sharedFile.id);
       _receivedFiles.add(sharedFile);
 
+      _progressController.add(UploadProgress(
+        filename: safeName,
+        currentBytes: size,
+        totalBytes: size,
+        percent: 100.0,
+        isCompleted: true,
+      ));
+
       return sharedFile;
     } catch (e) {
       try {
@@ -222,6 +350,7 @@ class FileStorageService {
           await partFile.delete();
         } catch (_) {}
       }
+      _progressController.add(null);
       rethrow;
     }
   }
@@ -256,5 +385,6 @@ class FileStorageService {
     }
     _sharedFiles.clear();
     _receivedFiles.clear();
+    _progressController.add(null);
   }
 }
