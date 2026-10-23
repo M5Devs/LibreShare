@@ -35,6 +35,8 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _serverBaseUrl;
   Timer? _approvalPollTimer;
   Timer? _uiRefreshTimer;
+  StreamSubscription<UploadProgress?>? _progressSubscription;
+  UploadProgress? _activeProgress;
   final Set<String> _promptedRequests = {};
 
   @override
@@ -48,10 +50,19 @@ class _HomeScreenState extends State<HomeScreen> {
         setState(() {});
       }
     });
+
+    _progressSubscription = _storageService.progressStream.listen((progress) {
+      if (mounted) {
+        setState(() {
+          _activeProgress = progress;
+        });
+      }
+    });
   }
 
   @override
   void dispose() {
+    _progressSubscription?.cancel();
     _uiRefreshTimer?.cancel();
     _stopApprovalPolling();
     if (widget.serverOverride == null && _server.isRunning) {
@@ -694,6 +705,41 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 24),
 
             // Received Files Section
+            if (_activeProgress != null && !_activeProgress!.isCompleted) ...[
+              Container(
+                margin: const EdgeInsets.only(bottom: 16),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2A2A3D),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFF8A2BE2), width: 1.5),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Receiving: ${_activeProgress!.filename} — ${_activeProgress!.percent.toStringAsFixed(0)}%',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 10),
+                    LinearProgressIndicator(
+                      value: _activeProgress!.percent / 100.0,
+                      backgroundColor: Colors.white10,
+                      valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF8A2BE2)),
+                      minHeight: 8,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+
             const Text(
               'Received Files',
               style: TextStyle(

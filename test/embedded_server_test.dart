@@ -267,4 +267,89 @@ void main() {
     expect(savedFile.filePath, isNot(contains('/etc/passwd')));
     expect(savedFile.name, equals('______etc_passwd'));
   });
+
+  test('GET /eruda.min.js serves Eruda script without auth', () async {
+    final port = server.actualPort!;
+    final request = await httpClient.get('127.0.0.1', port, '/eruda.min.js');
+    final response = await request.close();
+
+    expect(response.statusCode, HttpStatus.ok);
+    expect(response.headers.contentType.toString(), contains('javascript'));
+    final body = await response.transform(utf8.decoder).join();
+    expect(body, isNotEmpty);
+  });
+
+  test('Resumable Chunked Upload API: GET /status, POST /chunk, and POST /cancel', () async {
+    final port = server.actualPort!;
+    final session = createAuthSession();
+    final filename = 'large_file.iso';
+
+    // 1. GET status -> offset 0
+    var request = await httpClient.get('127.0.0.1', port, '/api/upload/status?filename=$filename');
+    request.cookies.add(Cookie('ls_session', session));
+    var response = await request.close();
+    expect(response.statusCode, HttpStatus.ok);
+    var body = await response.transform(utf8.decoder).join();
+    expect(jsonDecode(body)['offset'], equals(0));
+
+    // 2. POST chunk 1
+    final chunk1 = utf8.encode('Chunk 1 contents. ');
+    final chunk2 = utf8.encode('Chunk 2 contents.');
+    final totalBytes = chunk1.length + chunk2.length;
+
+    request = await httpClient.post('127.0.0.1', port, '/api/upload/chunk');
+    request.cookies.add(Cookie('ls_session', session));
+    request.headers.set('x-file-name', filename);
+    request.headers.set('x-chunk-offset', '0');
+    request.headers.set('x-total-bytes', totalBytes.toString());
+    request.add(chunk1);
+    response = await request.close();
+    expect(response.statusCode, HttpStatus.ok);
+    body = await response.transform(utf8.decoder).join();
+    expect(jsonDecode(body)['status'], equals('in_progress'));
+
+    // Verify GET status now shows chunk1 length
+    request = await httpClient.get('127.0.0.1', port, '/api/upload/status?filename=$filename');
+    request.cookies.add(Cookie('ls_session', session));
+    response = await request.close();
+    body = await response.transform(utf8.decoder).join();
+    expect(jsonDecode(body)['offset'], equals(chunk1.length));
+
+    // 3. POST chunk 2 -> complete
+    request = await httpClient.post('127.0.0.1', port, '/api/upload/chunk');
+    request.cookies.add(Cookie('ls_session', session));
+    request.headers.set('x-file-name', filename);
+    request.headers.set('x-chunk-offset', chunk1.length.toString());
+    request.headers.set('x-total-bytes', totalBytes.toString());
+    request.add(chunk2);
+    response = await request.close();
+    expect(response.statusCode, HttpStatus.ok);
+    body = await response.transform(utf8.decoder).join();
+    expect(jsonDecode(body)['status'], equals('completed'));
+
+    expect(storageService.receivedFiles.length, equals(1));
+
+    // 4. Test cancel on a new chunked upload
+    final cancelFilename = 'cancel_me.bin';
+    request = await httpClient.post('127.0.0.1', port, '/api/upload/chunk');
+    request.cookies.add(Cookie('ls_session', session));
+    request.headers.set('x-file-name', cancelFilename);
+    request.headers.set('x-chunk-offset', '0');
+    request.headers.set('x-total-bytes', '5000');
+    request.add(utf8.encode('Some partial data'));
+    response = await request.close();
+    await response.drain();
+
+    request = await httpClient.post('127.0.0.1', port, '/api/upload/cancel');
+    request.cookies.add(Cookie('ls_session', session));
+    request.headers.set('x-file-name', cancelFilename);
+    response = await request.close();
+    expect(response.statusCode, HttpStatus.ok);
+
+    request = await httpClient.get('127.0.0.1', port, '/api/upload/status?filename=$cancelFilename');
+    request.cookies.add(Cookie('ls_session', session));
+    response = await request.close();
+    body = await response.transform(utf8.decoder).join();
+    expect(jsonDecode(body)['offset'], equals(0));
+  });
 }

@@ -157,4 +157,66 @@ void main() {
     expect(file3.name, equals('document (2).pdf'));
     expect(file3.filePath, endsWith('/document (2).pdf'));
   });
+
+  test('chunked upload status, appendChunk, progress stream, and cancellation', () async {
+    final filename = 'chunk_test_video.mp4';
+    expect(await storageService.getUploadOffset(filename: filename), equals(0));
+
+    final progressEvents = <UploadProgress?>[];
+    final sub = storageService.progressStream.listen((event) {
+      progressEvents.add(event);
+    });
+
+    final chunk1 = utf8.encode('Chunk 1 Data. ');
+    final chunk2 = utf8.encode('Chunk 2 Data.');
+    final totalBytes = chunk1.length + chunk2.length;
+
+    // First chunk
+    final res1 = await storageService.appendChunk(
+      filename: filename,
+      stream: Stream.value(chunk1),
+      totalBytes: totalBytes,
+      chunkOffset: 0,
+    );
+
+    expect(res1['status'], equals('in_progress'));
+    expect(res1['offset'], equals(chunk1.length));
+    expect(await storageService.getUploadOffset(filename: filename), equals(chunk1.length));
+
+    // Second chunk
+    final res2 = await storageService.appendChunk(
+      filename: filename,
+      stream: Stream.value(chunk2),
+      totalBytes: totalBytes,
+      chunkOffset: chunk1.length,
+    );
+
+    expect(res2['status'], equals('completed'));
+    expect(res2['file']['name'], equals(filename));
+    expect(storageService.receivedFiles.length, equals(1));
+
+    await Future.delayed(Duration.zero);
+    await sub.cancel();
+
+    expect(progressEvents.isNotEmpty, isTrue);
+    expect(progressEvents.last?.isCompleted, isTrue);
+  });
+
+  test('cancelUpload deletes .part file and resets state', () async {
+    final filename = 'incomplete.zip';
+    final chunk = utf8.encode('Partial data');
+
+    await storageService.appendChunk(
+      filename: filename,
+      stream: Stream.value(chunk),
+      totalBytes: 1000,
+      chunkOffset: 0,
+    );
+
+    expect(await storageService.getUploadOffset(filename: filename), equals(chunk.length));
+
+    await storageService.cancelUpload(filename: filename);
+
+    expect(await storageService.getUploadOffset(filename: filename), equals(0));
+  });
 }
