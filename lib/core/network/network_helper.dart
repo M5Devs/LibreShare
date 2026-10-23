@@ -1,6 +1,8 @@
 import 'dart:io';
 
 class NetworkHelper {
+  static const int defaultPort = 5000;
+
   static Future<String> getLocalIpAddress() async {
     try {
       final interfaces = await NetworkInterface.list(
@@ -40,5 +42,9 @@ class NetworkHelper {
     }
 
     return '192.168.43.1';
+  }
+
+  static String formatServerUrl(String ip, [int port = defaultPort]) {
+    return 'http://$ip:$port';
   }
 }

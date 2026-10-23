@@ -153,9 +153,9 @@ class _HomeScreenState extends State<HomeScreen> {
           await _server.start();
         }
         final ip = hotspotInfo?['ip'] ?? await NetworkHelper.getLocalIpAddress();
-        final port = _server.actualPort ?? 8080;
+        final port = _server.actualPort ?? NetworkHelper.defaultPort;
         setState(() {
-          _serverBaseUrl = 'http://$ip:$port';
+          _serverBaseUrl = NetworkHelper.formatServerUrl(ip, port);
         });
         _startApprovalPolling();
       } else {
@@ -209,9 +209,9 @@ class _HomeScreenState extends State<HomeScreen> {
       try {
         await _server.start();
         final ip = await NetworkHelper.getLocalIpAddress();
-        final port = _server.actualPort ?? 8080;
+        final port = _server.actualPort ?? NetworkHelper.defaultPort;
         setState(() {
-          _serverBaseUrl = 'http://$ip:$port';
+          _serverBaseUrl = NetworkHelper.formatServerUrl(ip, port);
         });
         _startApprovalPolling();
       } catch (e) {
@@ -317,6 +317,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final receivedFiles = _storageService.receivedFiles;
     final pairingUrl = _fullPairingUrl;
 
+    final activeModeText = _isHotspotActive ? 'Offline Hotspot Mode' : 'LAN / Wi-Fi Mode';
+
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -331,7 +333,52 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Hotspot Mode Card / Switch
+            // Mode Indicator Banner
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2A2A3D),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white10),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _isHotspotActive ? Icons.wifi_tethering : Icons.wifi,
+                    color: const Color(0xFF8A2BE2),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Active Mode: $activeModeText',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _isHotspotActive
+                              ? 'Broadcasting Wi-Fi network directly from this device'
+                              : 'Connect devices to the same local Wi-Fi router (e.g. 192.168.x.x:5000)',
+                          style: const TextStyle(
+                            color: Colors.white54,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Offline Hotspot Mode Card
             Card(
               elevation: 4,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -343,17 +390,27 @@ class _HomeScreenState extends State<HomeScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Row(
+                        const Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Icon(Icons.wifi_tethering, color: Color(0xFF8A2BE2)),
-                            SizedBox(width: 8),
+                            Row(
+                              children: [
+                                Icon(Icons.wifi_tethering, color: Color(0xFF8A2BE2)),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Offline Hotspot Mode',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            SizedBox(height: 2),
                             Text(
-                              'Offline Hotspot Mode',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
+                              'Uses native hotspot when no Wi-Fi router is available',
+                              style: TextStyle(color: Colors.white54, fontSize: 11),
                             ),
                           ],
                         ),
@@ -397,7 +454,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 16),
 
-            // Server Status Card
+            // Server Status Card (LAN / Wi-Fi Sharing Server)
             Card(
               elevation: 4,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -420,13 +477,22 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                             ),
                             const SizedBox(width: 8),
-                            Text(
-                              _server.isRunning ? 'Server Active' : 'Server Stopped',
-                              style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _server.isRunning ? 'Server Active' : 'Server Stopped',
+                                  style: const TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                Text(
+                                  _isHotspotActive ? 'Hotspot Mode Active' : 'LAN / Wi-Fi Mode Active',
+                                  style: const TextStyle(color: Colors.white54, fontSize: 11),
+                                ),
+                              ],
                             ),
                           ],
                         ),

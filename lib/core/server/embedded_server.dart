@@ -17,7 +17,7 @@ class EmbeddedServer {
   HttpServer? _server;
 
   EmbeddedServer({
-    this.port = 8080,
+    this.port = 5000,
     this.htmlContentOverride,
     FileStorageService? storageService,
     SessionManager? sessionManager,
@@ -334,7 +334,16 @@ class EmbeddedServer {
         .addMiddleware(authMiddleware())
         .addHandler(router.call);
 
-    _server = await io.serve(handler, InternetAddress.anyIPv4, port);
+    try {
+      _server = await io.serve(handler, InternetAddress.anyIPv4, port);
+    } catch (e) {
+      if (port != 0) {
+        // Fallback to dynamic port allocation
+        _server = await io.serve(handler, InternetAddress.anyIPv4, 0);
+      } else {
+        rethrow;
+      }
+    }
     return _server!;
   }
 

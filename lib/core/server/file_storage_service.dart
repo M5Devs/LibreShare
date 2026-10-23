@@ -134,6 +134,35 @@ class FileStorageService {
     return name;
   }
 
+  Future<String> _resolveUniqueFilename(Directory dir, String sanitizedName) async {
+    final file = File('${dir.path}/$sanitizedName');
+    if (!await file.exists()) {
+      return sanitizedName;
+    }
+
+    final dotIdx = sanitizedName.lastIndexOf('.');
+    String nameBase;
+    String extension;
+
+    if (dotIdx > 0) {
+      nameBase = sanitizedName.substring(0, dotIdx);
+      extension = sanitizedName.substring(dotIdx);
+    } else {
+      nameBase = sanitizedName;
+      extension = '';
+    }
+
+    int counter = 1;
+    while (true) {
+      final candidateName = '$nameBase ($counter)$extension';
+      final candidateFile = File('${dir.path}/$candidateName');
+      if (!await candidateFile.exists()) {
+        return candidateName;
+      }
+      counter++;
+    }
+  }
+
   Future<SharedFile> saveStream({
     required String filename,
     required Stream<List<int>> stream,
@@ -146,7 +175,6 @@ class FileStorageService {
     final storageDir = await getStorageDirectory(category);
     final fileId = SharedFile.generateId();
     final partFilePath = '${storageDir.path}/$fileId.part';
-    final finalFilePath = '${storageDir.path}/$fileId-$safeName';
 
     final partFile = File(partFilePath);
     final IOSink sink = partFile.openWrite();
@@ -165,12 +193,15 @@ class FileStorageService {
       await sink.flush();
       await sink.close();
 
+      final resolvedName = await _resolveUniqueFilename(storageDir, safeName);
+      final finalFilePath = '${storageDir.path}/$resolvedName';
+
       final finalFile = await partFile.rename(finalFilePath);
       final detectedMime = mimeType ?? lookupMimeType(finalFile.path) ?? 'application/octet-stream';
 
       final sharedFile = SharedFile(
         id: fileId,
-        name: safeName,
+        name: resolvedName,
         size: size,
         type: detectedMime,
         filePath: finalFile.path,
