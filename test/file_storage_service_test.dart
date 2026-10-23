@@ -128,4 +128,33 @@ void main() {
     expect(sanitized2.length, lessThanOrEqualTo(200));
     expect(sanitized2, endsWith('.pdf'));
   });
+
+  test('saveStream handles filename collision correctly (e.g. document (1).pdf)', () async {
+    final stream1 = Stream.value(utf8.encode('File 1 content'));
+    final file1 = await storageService.saveStream(
+      filename: 'document.pdf',
+      stream: stream1,
+      mimeType: 'application/pdf',
+    );
+    expect(file1.name, equals('document.pdf'));
+    expect(file1.filePath, endsWith('/document.pdf'));
+
+    final stream2 = Stream.value(utf8.encode('File 2 content'));
+    final file2 = await storageService.saveStream(
+      filename: 'document.pdf',
+      stream: stream2,
+      mimeType: 'application/pdf',
+    );
+    expect(file2.name, equals('document (1).pdf'));
+    expect(file2.filePath, endsWith('/document (1).pdf'));
+
+    final stream3 = Stream.value(utf8.encode('File 3 content'));
+    final file3 = await storageService.saveStream(
+      filename: 'document.pdf',
+      stream: stream3,
+      mimeType: 'application/pdf',
+    );
+    expect(file3.name, equals('document (2).pdf'));
+    expect(file3.filePath, endsWith('/document (2).pdf'));
+  });
 }
