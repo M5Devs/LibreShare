@@ -1,0 +1,8 @@
+{
+  "name": "LibreShare Web",
+  "short_name": "LibreShare",
+  "display": "standalone",
+  "theme_color": "#1e1b4b",
+  "background_color": "#0f172a",
+  "start_url": "/"
+}

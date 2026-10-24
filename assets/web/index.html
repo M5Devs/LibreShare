@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="manifest" href="/manifest.json" />
   <title>LibreShare Web Transfer</title>
   <style>
     :root {
@@ -391,6 +392,7 @@
 <body>
   <header>
     <h1>LibreShare Web Transfer</h1>
+    <p id="device-identifier" style="font-size: 0.9rem; color: #aaa; margin-top: 6px;"></p>
   </header>
 
   <main>
@@ -420,6 +422,21 @@
 
     <!-- App Content Section -->
     <div class="app-content" id="app-content">
+
+      <!-- Quick Text / URL Sharing Section -->
+      <section class="file-list-section" style="margin-bottom: 24px;">
+        <h2 style="margin-bottom: 12px;">Quick Text / URL Sharing</h2>
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+          <textarea id="text-share-input" rows="3" placeholder="Type or paste text/link to send to phone..." style="width: 100%; background: var(--bg-color); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px; font-family: inherit; resize: vertical;"></textarea>
+          <button class="btn" id="send-text-btn" style="align-self: flex-end;">Send Text</button>
+        </div>
+        <div id="incoming-text-container" style="margin-top: 16px; padding: 12px; background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 8px; display: none;">
+          <div style="font-size: 0.85rem; color: #aaa; margin-bottom: 4px;">Incoming Shared Text / Link:</div>
+          <div id="incoming-text-content" style="font-size: 0.95rem; word-break: break-all; margin-bottom: 8px; white-space: pre-wrap;"></div>
+          <button class="btn btn-small" id="copy-text-btn" style="background-color: var(--accent-color); color: #121212;">Copy to Clipboard 📋</button>
+        </div>
+      </section>
+
       <div class="drop-zone" id="drop-zone">
         <p>Drag and drop files here</p>
         <span>or click to browse from your device</span>
@@ -434,7 +451,10 @@
       <section class="file-list-section">
         <div class="file-list-header">
           <h2>Available Files</h2>
-          <button class="refresh-btn" id="refresh-btn">Refresh</button>
+          <div style="display: flex; gap: 8px;">
+            <a href="/api/download-all" class="btn btn-small" id="download-zip-btn" style="display: inline-flex; align-items: center; text-decoration: none;">Download All (.ZIP) 📦</a>
+            <button class="refresh-btn" id="refresh-btn">Refresh</button>
+          </div>
         </div>
         <ul class="file-list" id="file-list">
           <li class="file-item">
@@ -710,6 +730,7 @@
       }
 
       async start() {
+        requestWakeLock();
         await this.syncOffset();
         this.uploadLoop();
       }
@@ -936,6 +957,113 @@
     });
 
     // Check auth state initially
+
+    // Friendly Device Identifier Generator
+    function getFriendlyDeviceName() {
+      const ua = navigator.userAgent;
+      let platform = 'Tablet / PC';
+      if (/Android/i.test(ua)) platform = 'Android Tablet';
+      else if (/iPad|iPhone|iPod/i.test(ua)) platform = 'iOS Device';
+      else if (/Windows/i.test(ua)) platform = 'Windows PC';
+      else if (/Macintosh/i.test(ua)) platform = 'Mac Workstation';
+      else if (/Linux/i.test(ua)) platform = 'Linux Device';
+
+      const adjectives = ['Fast', 'Swift', 'Bright', 'Nimble', 'Clever', 'Cosmic', 'Solar', 'Lunar', 'Silver', 'Golden'];
+      const animals = ['Falcon', 'Panda', 'Explorer', 'Phoenix', 'Otter', 'Dolphin', 'Eagle', 'Cheetah', 'Fox', 'Hawk'];
+      const hash = Array.from(ua).reduce((acc, char) => acc + char.charCodeAt(0), 0);
+      const adj = adjectives[hash % adjectives.length];
+      const animal = animals[(hash >> 2) % animals.length];
+
+      return `${adj} ${animal} (${platform})`;
+    }
+
+    document.getElementById('device-identifier').textContent = 'Connected as: ' + getFriendlyDeviceName();
+
+    // Browser Screen Wake Lock API
+    let wakeLock = null;
+
+    async function requestWakeLock() {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+          wakeLock.addEventListener('release', () => {
+            wakeLock = null;
+          });
+        }
+      } catch (err) {
+        console.warn('Wake Lock request failed:', err);
+      }
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && (uploadTasks.size > 0 || isDownloading)) {
+        requestWakeLock();
+      }
+    });
+
+    let isDownloading = false;
+    document.addEventListener('click', (e) => {
+      if (e.target && e.target.tagName === 'A' && e.target.getAttribute('download') !== null) {
+        requestWakeLock();
+      }
+    });
+
+    // Bidirectional Text Sharing JS
+    const textShareInput = document.getElementById('text-share-input');
+    const sendTextBtn = document.getElementById('send-text-btn');
+    const incomingTextContainer = document.getElementById('incoming-text-container');
+    const incomingTextContent = document.getElementById('incoming-text-content');
+    const copyTextBtn = document.getElementById('copy-text-btn');
+
+    async function fetchSharedText() {
+      try {
+        const res = await fetch('/api/text');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.text && data.text.trim() !== '') {
+            incomingTextContent.textContent = data.text;
+            incomingTextContainer.style.display = 'block';
+          }
+        }
+      } catch (e) {
+        console.error('Error fetching text:', e);
+      }
+    }
+
+    sendTextBtn.addEventListener('click', async () => {
+      const text = textShareInput.value.trim();
+      if (!text) return;
+      try {
+        const res = await fetch('/api/text', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: text })
+        });
+        if (res.ok) {
+          textShareInput.value = '';
+          fetchSharedText();
+        }
+      } catch (e) {
+        console.error('Error sending text:', e);
+      }
+    });
+
+    copyTextBtn.addEventListener('click', () => {
+      const text = incomingTextContent.textContent;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+          copyTextBtn.textContent = 'Copied! ✅';
+          setTimeout(() => { copyTextBtn.textContent = 'Copy to Clipboard 📋'; }, 2000);
+        });
+      }
+    });
+
+    setInterval(() => {
+      if (appContent.style.display === 'flex') {
+        fetchSharedText();
+      }
+    }, 2000);
+
     checkAuthAndFetchFiles();
   </script>
 </body>

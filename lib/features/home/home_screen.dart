@@ -38,6 +38,9 @@ class _HomeScreenState extends State<HomeScreen> {
   StreamSubscription<UploadProgress?>? _progressSubscription;
   UploadProgress? _activeProgress;
   final Set<String> _promptedRequests = {};
+  final TextEditingController _textController = TextEditingController();
+  StreamSubscription<String>? _textSubscription;
+  String _receivedText = '';
 
   @override
   void initState() {
@@ -51,6 +54,16 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     });
 
+
+    _textSubscription = _storageService.textStream.listen((text) {
+      if (mounted) {
+        setState(() {
+          _receivedText = text;
+        });
+      }
+    });
+    _receivedText = _storageService.latestSharedText;
+
     _progressSubscription = _storageService.progressStream.listen((progress) {
       if (mounted) {
         setState(() {
@@ -62,6 +75,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+
+    _textSubscription?.cancel();
+    _textController.dispose();
+
     _progressSubscription?.cancel();
     _uiRefreshTimer?.cancel();
     _stopApprovalPolling();
@@ -608,7 +625,127 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 24),
 
-            // Share Files Section
+
+            // Bidirectional Text & Clipboard Sharing Card
+            Card(
+              elevation: 4,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              color: const Color(0xFF1E1E2E),
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.text_fields, color: Color(0xFF8A2BE2)),
+                        SizedBox(width: 8),
+                        Text(
+                          'Share Text / Link',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _textController,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: InputDecoration(
+                              hintText: 'Enter text or URL to send...',
+                              hintStyle: const TextStyle(color: Colors.white38),
+                              filled: true,
+                              fillColor: const Color(0xFF2A2A3D),
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(10),
+                                borderSide: BorderSide.none,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          onPressed: () {
+                            final text = _textController.text.trim();
+                            if (text.isNotEmpty) {
+                              _storageService.setLatestSharedText(text);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Text broadcast to connected clients')),
+                              );
+                            }
+                          },
+                          icon: const Icon(Icons.send, size: 18),
+                          label: const Text('Send'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF8A2BE2),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (_receivedText.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2A2A3D),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFF8A2BE2).withAlpha(100)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Latest Shared Text / Link:',
+                              style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 4),
+                            SelectableText(
+                              _receivedText,
+                              style: const TextStyle(color: Colors.white, fontSize: 14),
+                            ),
+                            const SizedBox(height: 8),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: ElevatedButton.icon(
+                                onPressed: () {
+                                  Clipboard.setData(ClipboardData(text: _receivedText));
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('Text copied to clipboard!')),
+                                  );
+                                },
+                                icon: const Icon(Icons.copy, size: 16),
+                                label: const Text('Copy'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF8A2BE2),
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  minimumSize: Size.zero,
+                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+// Share Files Section
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [

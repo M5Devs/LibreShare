@@ -1,3 +1,4 @@
+import 'package:archive/archive.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -151,6 +152,81 @@ class EmbeddedServer {
         headers: {'content-type': 'application/json'},
       );
     });
+
+    router.get('/manifest.json', (Request request) async {
+      try {
+        String manifestContent = '';
+        try {
+          manifestContent = await rootBundle.loadString('assets/web/manifest.json');
+        } catch (_) {}
+        if (manifestContent.isEmpty) {
+          final file = File('assets/web/manifest.json');
+          if (await file.exists()) {
+            manifestContent = await file.readAsString();
+          }
+        }
+        if (manifestContent.isNotEmpty) {
+          return Response.ok(
+            manifestContent,
+            headers: {'content-type': 'application/manifest+json; charset=utf-8'},
+          );
+        }
+        return Response.notFound('manifest.json not found');
+      } catch (e) {
+        return Response.notFound('manifest.json not found');
+      }
+    });
+
+    router.get('/api/text', (Request request) {
+      return Response.ok(
+        jsonEncode({'text': storageService.latestSharedText}),
+        headers: {'content-type': 'application/json'},
+      );
+    });
+
+    router.post('/api/text', (Request request) async {
+      try {
+        final bodyText = await request.readAsString();
+        final json = jsonDecode(bodyText) as Map<String, dynamic>;
+        final text = json['text']?.toString() ?? '';
+        storageService.setLatestSharedText(text);
+        return Response.ok(
+          jsonEncode({'message': 'Text updated', 'text': text}),
+          headers: {'content-type': 'application/json'},
+        );
+      } catch (e) {
+        return Response.badRequest(
+          body: jsonEncode({'error': 'Invalid request body'}),
+          headers: {'content-type': 'application/json'},
+        );
+      }
+    });
+
+    router.get('/api/download-all', (Request request) async {
+      final sharedFiles = storageService.sharedFiles;
+      final archive = Archive();
+
+      for (final sharedFile in sharedFiles) {
+        final file = File(sharedFile.filePath);
+        if (await file.exists()) {
+          final bytes = await file.readAsBytes();
+          archive.addFile(ArchiveFile(sharedFile.name, bytes.length, bytes));
+        }
+      }
+
+      final encoder = ZipEncoder();
+      final zipBytes = encoder.encode(archive);
+
+      return Response.ok(
+        zipBytes,
+        headers: {
+          'content-type': 'application/zip',
+          'content-disposition': 'attachment; filename="LibreShare_Files.zip"',
+          'x-content-type-options': 'nosniff',
+        },
+      );
+    });
+
 
     router.get('/api/download/<fileId>', (Request request, String fileId) async {
       final sharedFile = storageService.getFileById(fileId);
@@ -377,7 +453,7 @@ class EmbeddedServer {
         return (Request request) async {
           final path = request.url.path;
 
-          if (path == '' || path == '/' || path == 'eruda.min.js') {
+          if (path == '' || path == '/' || path == 'eruda.min.js' || path == 'manifest.json') {
             return innerHandler(request);
           }
 

@@ -219,4 +219,20 @@ void main() {
 
     expect(await storageService.getUploadOffset(filename: filename), equals(0));
   });
+
+
+  test('latestSharedText updates and triggers textStream', () async {
+    final textEvents = <String>[];
+    final sub = storageService.textStream.listen((text) {
+      textEvents.add(text);
+    });
+
+    storageService.setLatestSharedText('Hello World');
+    expect(storageService.latestSharedText, equals('Hello World'));
+
+    await Future.delayed(Duration.zero);
+    await sub.cancel();
+
+    expect(textEvents, equals(['Hello World']));
+  });
 }
