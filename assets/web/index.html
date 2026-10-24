@@ -386,8 +386,14 @@
     }
 
 </style>
-<script src="/eruda.min.js"></script>
-  <script>if (window.eruda) eruda.init();</script>
+<script>
+    if (window.location.search.includes('debug=1')) {
+      const script = document.createElement('script');
+      script.src = '/eruda.min.js';
+      script.onload = () => { if (window.eruda) eruda.init(); };
+      document.head.appendChild(script);
+    }
+  </script>
 </head>
 <body>
   <header>
@@ -400,9 +406,9 @@
     <div class="lock-screen" id="lock-screen">
       <!-- Section A: PIN Unlock -->
       <div class="lock-card">
-        <h2>Enter 4-Digit PIN shown on host device</h2>
+        <h2>Enter 6-Digit PIN shown on host device</h2>
         <div class="pin-input-group">
-          <input type="text" id="pin-input" class="pin-input" maxlength="4" placeholder="••••" autocomplete="off" />
+          <input type="text" id="pin-input" class="pin-input" maxlength="6" placeholder="••••••" autocomplete="off" />
         </div>
         <button class="btn" id="unlock-btn" style="width: 100%;">Unlock</button>
         <p class="error-msg" id="pin-error">Invalid PIN. Please try again.</p>
@@ -571,8 +577,8 @@
 
     async function submitPin() {
       const pin = pinInput.value.trim();
-      if (pin.length !== 4) {
-        pinError.textContent = 'PIN must be 4 digits.';
+      if (pin.length !== 6) {
+        pinError.textContent = 'PIN must be 6 digits.';
         pinError.style.display = 'block';
         return;
       }
@@ -587,6 +593,11 @@
         if (response.ok) {
           pinError.style.display = 'none';
           checkAuthAndFetchFiles();
+        } else if (response.status === 429) {
+          const data = await response.json().catch(() => ({}));
+          const retryAfter = data.retryAfter || response.headers.get('Retry-After') || 30;
+          pinError.textContent = `Too many failed attempts. Locked for ${retryAfter}s.`;
+          pinError.style.display = 'block';
         } else {
           pinError.textContent = 'Invalid PIN. Please try again.';
           pinError.style.display = 'block';
@@ -603,7 +614,21 @@
       approvalMsg.textContent = 'Waiting for confirmation on host phone...';
 
       try {
-        const response = await fetch('/api/auth/request-approval', { method: 'POST' });
+        const response = await fetch('/api/auth/request-approval', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ deviceLabel: getFriendlyDeviceName() })
+        });
+
+        if (response.status === 429) {
+          approvalMsg.textContent = 'Too many pending requests. Please wait.';
+          setTimeout(() => {
+            approvalStatus.style.display = 'none';
+            requestApprovalBtn.disabled = false;
+          }, 3000);
+          return;
+        }
+
         if (!response.ok) throw new Error('Request failed');
         const data = await response.json();
         const requestId = data.requestId;
@@ -620,7 +645,7 @@
                 checkAuthAndFetchFiles();
               } else if (pollData.status === 'rejected') {
                 clearInterval(pollInterval);
-                approvalMsg.textContent = 'Access rejected by host device.';
+                approvalMsg.textContent = 'Access rejected or expired.';
                 requestApprovalBtn.disabled = false;
               }
             }
@@ -641,7 +666,8 @@
     class UploadTask {
       constructor(file) {
         this.file = file;
-        this.uploadId = 'up_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        this.cardId = 'up_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        this.uploadId = null;
         this.filename = file.name;
         this.totalBytes = file.size;
         this.currentOffset = 0;
@@ -665,26 +691,26 @@
           <div class="upload-card-header">
             <span class="upload-card-title" title="${this.filename}">${this.filename}</span>
             <div class="upload-card-controls">
-              <button class="btn-small btn-pause" id="btn-toggle-${this.uploadId}">Pause ⏸️</button>
-              <button class="btn-small btn-cancel" id="btn-cancel-${this.uploadId}">Cancel ❌</button>
+              <button class="btn-small btn-pause" id="btn-toggle-${this.cardId}">Pause ⏸️</button>
+              <button class="btn-small btn-cancel" id="btn-cancel-${this.cardId}">Cancel ❌</button>
             </div>
           </div>
           <div class="upload-card-meta">
-            <span id="meta-size-${this.uploadId}">0 B / ${formatBytes(this.totalBytes)}</span> •
-            <span id="meta-speed-${this.uploadId}">0 B/s</span>
+            <span id="meta-size-${this.cardId}">0 B / ${formatBytes(this.totalBytes)}</span> •
+            <span id="meta-speed-${this.cardId}">0 B/s</span>
           </div>
           <div class="progress-bar-container">
-            <div class="progress-bar-fill" id="bar-${this.uploadId}" style="width: 0%;"></div>
+            <div class="progress-bar-fill" id="bar-${this.cardId}" style="width: 0%;"></div>
           </div>
           <div class="progress-info">
-            <span id="status-${this.uploadId}">Uploading...</span>
-            <span id="percent-${this.uploadId}">0%</span>
+            <span id="status-${this.cardId}">Uploading...</span>
+            <span id="percent-${this.cardId}">0%</span>
           </div>
         `;
         container.appendChild(this.card);
 
-        this.toggleBtn = this.card.querySelector(`#btn-toggle-${this.uploadId}`);
-        this.cancelBtn = this.card.querySelector(`#btn-cancel-${this.uploadId}`);
+        this.toggleBtn = this.card.querySelector(`#btn-toggle-${this.cardId}`);
+        this.cancelBtn = this.card.querySelector(`#btn-cancel-${this.cardId}`);
 
         this.toggleBtn.addEventListener('click', () => {
           if (this.status === 'uploading') {
@@ -702,11 +728,11 @@
       updateUI() {
         if (!this.card) return;
         const percent = Math.min(100, Math.round((this.currentOffset / this.totalBytes) * 100)) || 0;
-        const bar = this.card.querySelector(`#bar-${this.uploadId}`);
-        const percentEl = this.card.querySelector(`#percent-${this.uploadId}`);
-        const sizeEl = this.card.querySelector(`#meta-size-${this.uploadId}`);
-        const speedEl = this.card.querySelector(`#meta-speed-${this.uploadId}`);
-        const statusEl = this.card.querySelector(`#status-${this.uploadId}`);
+        const bar = this.card.querySelector(`#bar-${this.cardId}`);
+        const percentEl = this.card.querySelector(`#percent-${this.cardId}`);
+        const sizeEl = this.card.querySelector(`#meta-size-${this.cardId}`);
+        const speedEl = this.card.querySelector(`#meta-speed-${this.cardId}`);
+        const statusEl = this.card.querySelector(`#status-${this.cardId}`);
 
         if (bar) bar.style.width = percent + '%';
         if (percentEl) percentEl.textContent = percent + '%';
@@ -731,13 +757,35 @@
 
       async start() {
         requestWakeLock();
+        if (!this.uploadId) {
+          try {
+            const initRes = await fetch('/api/upload/init', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: this.filename, size: this.totalBytes })
+            });
+            if (!initRes.ok) {
+              this.status = 'failed';
+              this.updateUI();
+              return;
+            }
+            const initData = await initRes.json();
+            this.uploadId = initData.uploadId;
+          } catch (e) {
+            console.error('Init upload failed:', e);
+            this.status = 'failed';
+            this.updateUI();
+            return;
+          }
+        }
         await this.syncOffset();
         this.uploadLoop();
       }
 
       async syncOffset() {
+        if (!this.uploadId) return;
         try {
-          const res = await fetch(`/api/upload/status?uploadId=${encodeURIComponent(this.uploadId)}&filename=${encodeURIComponent(this.filename)}`);
+          const res = await fetch(`/api/upload/status?uploadId=${encodeURIComponent(this.uploadId)}`);
           if (res.ok) {
             const data = await res.json();
             this.currentOffset = data.offset || 0;
@@ -825,9 +873,9 @@
             if (e.lengthComputable) {
               const currentLoaded = offset + e.loaded;
               const percent = Math.min(100, Math.round((currentLoaded / total) * 100));
-              const bar = this.card.querySelector(`#bar-${this.uploadId}`);
-              const percentEl = this.card.querySelector(`#percent-${this.uploadId}`);
-              const sizeEl = this.card.querySelector(`#meta-size-${this.uploadId}`);
+              const bar = this.card.querySelector(`#bar-${this.cardId}`);
+              const percentEl = this.card.querySelector(`#percent-${this.cardId}`);
+              const sizeEl = this.card.querySelector(`#meta-size-${this.cardId}`);
               if (bar) bar.style.width = percent + '%';
               if (percentEl) percentEl.textContent = percent + '%';
               if (sizeEl) sizeEl.textContent = `${formatBytes(currentLoaded)} / ${formatBytes(total)}`;
@@ -839,6 +887,14 @@
             this.currentXhr = null;
             if (xhr.status === 200) {
               resolve(true);
+            } else if (xhr.status === 409) {
+              try {
+                const data = JSON.parse(xhr.responseText);
+                if (typeof data.offset === 'number') {
+                  this.currentOffset = data.offset;
+                }
+              } catch (_) {}
+              resolve(false);
             } else {
               resolve(false);
             }
@@ -897,7 +953,7 @@
         if (this.card && this.card.parentNode) {
           this.card.parentNode.removeChild(this.card);
         }
-        uploadTasks.delete(this.uploadId);
+        uploadTasks.delete(this.cardId);
         checkHideProgressSection();
       }
     }
@@ -913,7 +969,7 @@
       if (!files || files.length === 0) return;
       Array.from(files).forEach((file) => {
         const task = new UploadTask(file);
-        uploadTasks.set(task.uploadId, task);
+        uploadTasks.set(task.cardId, task);
         task.start();
       });
     }
