@@ -352,4 +352,81 @@ void main() {
     body = await response.transform(utf8.decoder).join();
     expect(jsonDecode(body)['offset'], equals(0));
   });
+
+
+  test('GET /manifest.json returns manifest file without auth', () async {
+    final port = server.actualPort!;
+    final request = await httpClient.get('127.0.0.1', port, '/manifest.json');
+    final response = await request.close();
+
+    expect(response.statusCode, HttpStatus.ok);
+    expect(response.headers.contentType.toString(), contains('application/manifest+json'));
+    final body = await response.transform(utf8.decoder).join();
+    expect(body, contains('LibreShare Web'));
+  });
+
+  test('POST /api/text and GET /api/text bidirectional sharing', () async {
+    final port = server.actualPort!;
+    final session = createAuthSession();
+
+    // 1. GET text initially empty
+    var request = await httpClient.get('127.0.0.1', port, '/api/text');
+    request.cookies.add(Cookie('ls_session', session));
+    var response = await request.close();
+    expect(response.statusCode, HttpStatus.ok);
+    var body = await response.transform(utf8.decoder).join();
+    expect(jsonDecode(body)['text'], equals(''));
+
+    // 2. POST text
+    request = await httpClient.post('127.0.0.1', port, '/api/text');
+    request.cookies.add(Cookie('ls_session', session));
+    request.headers.contentType = ContentType.json;
+    request.write(jsonEncode({'text': 'https://github.com/libreshare'}));
+    response = await request.close();
+    expect(response.statusCode, HttpStatus.ok);
+
+    // 3. GET text updated
+    request = await httpClient.get('127.0.0.1', port, '/api/text');
+    request.cookies.add(Cookie('ls_session', session));
+    response = await request.close();
+    expect(response.statusCode, HttpStatus.ok);
+    body = await response.transform(utf8.decoder).join();
+    expect(jsonDecode(body)['text'], equals('https://github.com/libreshare'));
+  });
+
+  test('GET /api/download-all downloads shared files as ZIP archive', () async {
+    final port = server.actualPort!;
+    final session = createAuthSession();
+
+    final file1Path = '${tempDir.path}/doc1.txt';
+    final file2Path = '${tempDir.path}/doc2.txt';
+    await File(file1Path).writeAsString('Doc 1 content');
+    await File(file2Path).writeAsString('Doc 2 content');
+
+    storageService.addSharedFile(SharedFile(
+      id: 'f1',
+      name: 'doc1.txt',
+      size: 13,
+      type: 'text/plain',
+      filePath: file1Path,
+    ));
+    storageService.addSharedFile(SharedFile(
+      id: 'f2',
+      name: 'doc2.txt',
+      size: 13,
+      type: 'text/plain',
+      filePath: file2Path,
+    ));
+
+    final request = await httpClient.get('127.0.0.1', port, '/api/download-all');
+    request.cookies.add(Cookie('ls_session', session));
+    final response = await request.close();
+
+    expect(response.statusCode, HttpStatus.ok);
+    expect(response.headers.contentType.toString(), contains('application/zip'));
+    expect(response.headers.value('content-disposition'), contains('LibreShare_Files.zip'));
+
+    final bytes = await response.fold<List<int>>([], (previous, element) => previous..addAll(element));
+    expect(bytes.length, greaterThan(0));
+  });
 }

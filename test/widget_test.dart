@@ -68,6 +68,7 @@ void main() {
     expect(find.text('1.0 KB • application/pdf'), findsOneWidget);
 
     // Tap delete icon to remove file
+    await tester.scrollUntilVisible(find.byIcon(Icons.delete_outline), 100, scrollable: find.byType(Scrollable).first);
     await tester.tap(find.byIcon(Icons.delete_outline));
     await tester.pump();
 

@@ -35,6 +35,19 @@ class FileStorageService {
   final StreamController<UploadProgress?> _progressController =
       StreamController<UploadProgress?>.broadcast();
 
+  String _latestSharedText = '';
+  final StreamController<String> _textStreamController =
+      StreamController<String>.broadcast();
+
+  String get latestSharedText => _latestSharedText;
+  Stream<String> get textStream => _textStreamController.stream;
+
+  void setLatestSharedText(String text) {
+    _latestSharedText = text;
+    _textStreamController.add(text);
+  }
+
+
   FileStorageService({
     this.storageDirectoryOverride,
     this.maxUploadBytes = 4 * 1024 * 1024 * 1024, // 4 GiB default
