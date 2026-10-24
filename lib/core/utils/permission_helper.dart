@@ -56,6 +56,24 @@ class PermissionHelper {
     return await openAppSettings();
   }
 
+  /// Request notification permission on Android 13+ for Foreground Service.
+  static Future<bool> requestNotificationPermission(BuildContext context) async {
+    if (!_isAndroid) return true;
+
+    final sdkInt = await _androidSdkVersion;
+    if (sdkInt < 33) return true;
+
+    var status = await _checkPermission(Permission.notification);
+    if (status.isDenied) {
+      status = await _requestPermission(Permission.notification);
+    }
+
+    if (status.isGranted) {
+      return true;
+    }
+    return false;
+  }
+
   /// Request Location & Nearby Devices permissions for Hotspot creation.
   static Future<bool> requestHotspotPermissions(BuildContext context) async {
     if (!_isAndroid) return true;
