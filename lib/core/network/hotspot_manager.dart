@@ -18,8 +18,18 @@ class HotspotManager {
       if (result != null) {
         return result.map((key, value) => MapEntry(key.toString(), value.toString()));
       }
-    } on PlatformException catch (_) {
-      rethrow;
+    } on PlatformException catch (e) {
+      if (e.code == 'HOTSPOT_IP_NOT_FOUND') {
+        throw Exception('Hotspot started but IP address could not be detected. Please try again.');
+      } else if (e.code == 'PERMISSION_DENIED') {
+        throw Exception('Hotspot permission denied by system.');
+      } else if (e.code == 'UNSUPPORTED') {
+        throw Exception('LocalOnlyHotspot requires Android 8.0 or newer.');
+      } else if (e.code == 'HOTSPOT_FAILED') {
+        throw Exception('Failed to start hotspot: ${e.message ?? e.code}');
+      } else {
+        throw Exception('Hotspot error (${e.code}): ${e.message}');
+      }
     }
     return null;
   }

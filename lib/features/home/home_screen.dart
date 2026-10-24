@@ -1,3 +1,9 @@
+import '../../core/network/hotspot_manager.dart';
+import '../../core/network/network_helper.dart';
+import '../../core/platform/native_bridge.dart';
+import '../../core/server/embedded_server.dart';
+import '../../core/server/file_storage_service.dart';
+import '../../core/server/shared_file.dart';
 import '../../core/utils/permission_helper.dart';
 import 'dart:async';
 import 'dart:io';
@@ -5,11 +11,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import '../../core/network/hotspot_manager.dart';
-import '../../core/network/network_helper.dart';
-import '../../core/server/embedded_server.dart';
-import '../../core/server/file_storage_service.dart';
-import '../../core/server/shared_file.dart';
 
 class HomeScreen extends StatefulWidget {
   final EmbeddedServer? serverOverride;
@@ -41,6 +42,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _textController = TextEditingController();
   StreamSubscription<String>? _textSubscription;
   String _receivedText = '';
+  StreamSubscription<Map<String, dynamic>>? _nativeEventsSubscription;
 
   @override
   void initState() {
@@ -53,7 +55,6 @@ class _HomeScreenState extends State<HomeScreen> {
         setState(() {});
       }
     });
-
 
     _textSubscription = _storageService.textStream.listen((text) {
       if (mounted) {
@@ -71,11 +72,26 @@ class _HomeScreenState extends State<HomeScreen> {
         });
       }
     });
+
+    _nativeEventsSubscription = NativeBridge.events.listen((event) {
+      if (!mounted) return;
+      final type = event['type'];
+      if (type == 'stop_requested') {
+        _stopServerAndHotspot();
+      } else if (type == 'hotspot_stopped') {
+        _onHotspotStopped();
+      } else if (type == 'service_error') {
+        final message = event['message'] ?? 'Service error occurred';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Service error: $message')),
+        );
+      }
+    });
   }
 
   @override
   void dispose() {
-
+    _nativeEventsSubscription?.cancel();
     _textSubscription?.cancel();
     _textController.dispose();
 
@@ -85,6 +101,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (widget.serverOverride == null && _server.isRunning) {
       _server.stop();
     }
+    NativeBridge.stopForegroundService();
     super.dispose();
   }
 
@@ -170,6 +187,41 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _stopServerAndHotspot() async {
+    _stopApprovalPolling();
+    if (_server.isRunning) {
+      await _server.stop();
+    }
+    await HotspotManager.stopHotspot();
+    await NativeBridge.stopForegroundService();
+    if (mounted) {
+      setState(() {
+        _isHotspotActive = false;
+        _hotspotSsid = null;
+        _hotspotPassword = null;
+        _serverBaseUrl = null;
+      });
+    }
+  }
+
+  Future<void> _onHotspotStopped() async {
+    if (_isHotspotActive || _server.isRunning) {
+      _stopApprovalPolling();
+      if (_server.isRunning) {
+        await _server.stop();
+      }
+      await NativeBridge.stopForegroundService();
+      if (mounted) {
+        setState(() {
+          _isHotspotActive = false;
+          _hotspotSsid = null;
+          _hotspotPassword = null;
+          _serverBaseUrl = null;
+        });
+      }
+    }
+  }
+
   Future<void> _toggleHotspotMode(bool enable) async {
     if (_isServerStarting) return;
 
@@ -198,16 +250,23 @@ class _HomeScreenState extends State<HomeScreen> {
         }
         final ip = hotspotInfo?['ip'] ?? await NetworkHelper.getLocalIpAddress();
         final port = _server.actualPort ?? NetworkHelper.defaultPort;
+        final baseUrl = NetworkHelper.formatServerUrl(ip, port);
         setState(() {
-          _serverBaseUrl = NetworkHelper.formatServerUrl(ip, port);
+          _serverBaseUrl = baseUrl;
         });
         _startApprovalPolling();
+
+        if (mounted) {
+          await PermissionHelper.requestNotificationPermission(context);
+        }
+        await NativeBridge.startForegroundService(text: 'Serving at $baseUrl');
       } else {
         await HotspotManager.stopHotspot();
         _stopApprovalPolling();
         if (_server.isRunning) {
           await _server.stop();
         }
+        await NativeBridge.stopForegroundService();
         setState(() {
           _isHotspotActive = false;
           _hotspotSsid = null;
@@ -239,6 +298,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (_isHotspotActive) {
         await HotspotManager.stopHotspot();
       }
+      await NativeBridge.stopForegroundService();
       setState(() {
         _serverBaseUrl = null;
         _isHotspotActive = false;
@@ -254,10 +314,16 @@ class _HomeScreenState extends State<HomeScreen> {
         await _server.start();
         final ip = await NetworkHelper.getLocalIpAddress();
         final port = _server.actualPort ?? NetworkHelper.defaultPort;
+        final baseUrl = NetworkHelper.formatServerUrl(ip, port);
         setState(() {
-          _serverBaseUrl = NetworkHelper.formatServerUrl(ip, port);
+          _serverBaseUrl = baseUrl;
         });
         _startApprovalPolling();
+
+        if (mounted) {
+          await PermissionHelper.requestNotificationPermission(context);
+        }
+        await NativeBridge.startForegroundService(text: 'Serving at $baseUrl');
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -641,7 +707,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 24),
 
-
             // Bidirectional Text & Clipboard Sharing Card
             Card(
               elevation: 4,
@@ -761,7 +826,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             const SizedBox(height: 16),
-// Share Files Section
+
+            // Share Files Section
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [

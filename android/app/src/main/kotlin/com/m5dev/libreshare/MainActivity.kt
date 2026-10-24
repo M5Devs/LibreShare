@@ -1,76 +1,68 @@
 package com.m5dev.libreshare
 
-import android.content.Context
-import android.net.wifi.WifiManager
-import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
-    private val CHANNEL = "com.m5dev.libreshare/hotspot"
-    private var reservation: WifiManager.LocalOnlyHotspotReservation? = null
-
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
+        val messenger = flutterEngine.dartExecutor.binaryMessenger
+
+        MethodChannel(messenger, "com.m5dev.libreshare/hotspot").setMethodCallHandler { call, result ->
             when (call.method) {
-                "startHotspot" -> {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-                        try {
-                            wifiManager.startLocalOnlyHotspot(object : WifiManager.LocalOnlyHotspotCallback() {
-                                override fun onStarted(res: WifiManager.LocalOnlyHotspotReservation) {
-                                    super.onStarted(res)
-                                    reservation = res
-                                    var ssid: String? = null
-                                    var password: String? = null
-
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                                        val config = res.softApConfiguration
-                                        ssid = config.ssid
-                                        password = config.passphrase
-                                    } else {
-                                        @Suppress("DEPRECATION")
-                                        val config = res.wifiConfiguration
-                                        @Suppress("DEPRECATION")
-                                        ssid = config?.SSID
-                                        @Suppress("DEPRECATION")
-                                        password = config?.preSharedKey
-                                    }
-
-                                    result.success(
-                                        mapOf(
-                                            "ssid" to (ssid ?: "LibreShare-Hotspot"),
-                                            "password" to (password ?: ""),
-                                            "ip" to "192.168.43.1"
-                                        )
-                                    )
-                                }
-
-                                override fun onFailed(reason: Int) {
-                                    super.onFailed(reason)
-                                    result.error("HOTSPOT_FAILED", "Failed with code: $reason", null)
-                                }
-                            }, null)
-                        } catch (e: Exception) {
-                            result.error("HOTSPOT_FAILED", e.message, null)
-                        }
-                    } else {
-                        result.error("UNSUPPORTED", "LocalOnlyHotspot requires Android 8.0+", null)
-                    }
-                }
+                "startHotspot" -> HotspotController.start(
+                    applicationContext,
+                    onSuccess = { i ->
+                        result.success(mapOf("ssid" to i.ssid, "password" to i.password, "ip" to i.ip, "iface" to i.iface))
+                    },
+                    onError = { code, msg -> result.error(code, msg, null) }
+                )
                 "stopHotspot" -> {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        reservation?.close()
-                        reservation = null
-                    }
+                    HotspotController.stop()
                     result.success(true)
                 }
-                else -> {
-                    result.notImplemented()
-                }
+                else -> result.notImplemented()
             }
         }
+
+        MethodChannel(messenger, "com.m5dev.libreshare/service").setMethodCallHandler { call, result ->
+            try {
+                when (call.method) {
+                    "start" -> {
+                        LibreShareService.start(this, call.argument<String>("text") ?: "Sharing files")
+                        result.success(true)
+                    }
+                    "update" -> {
+                        LibreShareService.update(this, call.argument<String>("text") ?: "Sharing files")
+                        result.success(true)
+                    }
+                    "stop" -> {
+                        LibreShareService.stop(this)
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            } catch (e: Exception) {
+                result.error("SERVICE_FAILED", e.message, null)
+            }
+        }
+
+        EventChannel(messenger, "com.m5dev.libreshare/events").setStreamHandler(
+            object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    NativeEvents.sink = events
+                }
+                override fun onCancel(arguments: Any?) {
+                    NativeEvents.sink = null
+                }
+            }
+        )
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        NativeEvents.sink = null
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 }
