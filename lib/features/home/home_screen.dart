@@ -102,17 +102,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _checkPendingApprovalRequests() {
     if (!_server.isRunning) return;
-    final pending = _server.sessionManager.pendingRequestIds;
-    for (final requestId in pending) {
-      if (!_promptedRequests.contains(requestId)) {
-        _promptedRequests.add(requestId);
-        _showApprovalDialog(requestId);
+    final pending = _server.sessionManager.pendingRequests;
+    for (final req in pending) {
+      if (!_promptedRequests.contains(req.id)) {
+        _promptedRequests.add(req.id);
+        _showApprovalDialog(req.id, req.clientIp, req.deviceLabel);
         break;
       }
     }
   }
 
-  Future<void> _showApprovalDialog(String requestId) async {
+  Future<void> _showApprovalDialog(String requestId, String clientIp, String deviceLabel) async {
     if (!mounted) return;
 
     final allowed = await showDialog<bool>(
@@ -125,9 +125,25 @@ class _HomeScreenState extends State<HomeScreen> {
             'Connection Request',
             style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
           ),
-          content: const Text(
-            'A new device wants to connect. Allow access?',
-            style: TextStyle(color: Colors.white70),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Device: $deviceLabel',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'IP Address: $clientIp',
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Allow this device to access shared files?',
+                style: TextStyle(color: Colors.white70),
+              ),
+            ],
           ),
           actions: [
             TextButton(

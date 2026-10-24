@@ -1,12 +1,12 @@
-import 'package:archive/archive.dart';
-import 'package:wakelock_plus/wakelock_plus.dart';
 import 'dart:convert';
 import 'dart:io';
+import 'package:archive/archive_io.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:mime/mime.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as io;
 import 'package:shelf_router/shelf_router.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import 'file_storage_service.dart';
 import 'session_manager.dart';
 import 'shared_file.dart';
@@ -17,6 +17,9 @@ class EmbeddedServer {
   final FileStorageService storageService;
   final SessionManager sessionManager;
   HttpServer? _server;
+
+  String? _cachedHtmlContent;
+  String? _cachedManifestContent;
 
   EmbeddedServer({
     this.port = 5000,
@@ -30,6 +33,9 @@ class EmbeddedServer {
   int? get actualPort => _server?.port;
 
   Future<String> _getHtmlContent() async {
+    if (_cachedHtmlContent != null) {
+      return _cachedHtmlContent!;
+    }
     String content = htmlContentOverride ?? '';
     if (content.isEmpty) {
       try {
@@ -41,7 +47,34 @@ class EmbeddedServer {
         }
       }
     }
+    _cachedHtmlContent = content;
     return content;
+  }
+
+  Future<String> _getManifestContent() async {
+    if (_cachedManifestContent != null) {
+      return _cachedManifestContent!;
+    }
+    String manifestContent = '';
+    try {
+      manifestContent = await rootBundle.loadString('assets/web/manifest.json');
+    } catch (_) {}
+    if (manifestContent.isEmpty) {
+      final file = File('assets/web/manifest.json');
+      if (await file.exists()) {
+        manifestContent = await file.readAsString();
+      }
+    }
+    _cachedManifestContent = manifestContent;
+    return manifestContent;
+  }
+
+  String _rfc5987Encode(String input) {
+    return Uri.encodeComponent(input)
+        .replaceAll("'", "%27")
+        .replaceAll("(", "%28")
+        .replaceAll(")", "%29")
+        .replaceAll("*", "%2A");
   }
 
   String? _getSessionCookie(Request request) {
@@ -55,6 +88,18 @@ class EmbeddedServer {
       }
     }
     return null;
+  }
+
+  String _getClientIp(Request request) {
+    final forwarded = request.headers['x-forwarded-for'];
+    if (forwarded != null && forwarded.isNotEmpty) {
+      return forwarded.split(',').first.trim();
+    }
+    final connectionInfo = request.context['shelf.io.connection_info'] as HttpConnectionInfo?;
+    if (connectionInfo != null) {
+      return connectionInfo.remoteAddress.address;
+    }
+    return 'Unknown IP';
   }
 
   Future<HttpServer> start() async {
@@ -85,7 +130,23 @@ class EmbeddedServer {
         final json = jsonDecode(bodyText) as Map<String, dynamic>;
         final pin = json['pin']?.toString() ?? '';
 
-        if (sessionManager.validatePin(pin)) {
+        final pinResult = sessionManager.validatePin(pin);
+
+        if (pinResult.isLocked) {
+          return Response(
+            429,
+            body: jsonEncode({
+              'error': 'Too many failed attempts. Locked for ${pinResult.retryAfterSeconds} seconds.',
+              'retryAfter': pinResult.retryAfterSeconds,
+            }),
+            headers: {
+              'content-type': 'application/json',
+              'retry-after': pinResult.retryAfterSeconds.toString(),
+            },
+          );
+        }
+
+        if (pinResult.isValid) {
           final session = sessionManager.createSession();
           return Response.ok(
             jsonEncode({'message': 'Authenticated'}),
@@ -109,8 +170,39 @@ class EmbeddedServer {
       }
     });
 
-    router.post('/api/auth/request-approval', (Request request) {
-      final requestId = sessionManager.createApprovalRequest();
+    router.post('/api/auth/request-approval', (Request request) async {
+      final clientIp = _getClientIp(request);
+      String deviceLabel = 'Unknown Device';
+
+      try {
+        if (request.contentLength != null && request.contentLength! > 0) {
+          final bodyText = await request.readAsString();
+          if (bodyText.isNotEmpty) {
+            final json = jsonDecode(bodyText) as Map<String, dynamic>;
+            deviceLabel = json['deviceLabel']?.toString() ??
+                request.headers['user-agent'] ??
+                'Unknown Device';
+          }
+        } else {
+          deviceLabel = request.headers['user-agent'] ?? 'Unknown Device';
+        }
+      } catch (_) {
+        deviceLabel = request.headers['user-agent'] ?? 'Unknown Device';
+      }
+
+      final requestId = sessionManager.createApprovalRequest(
+        clientIp: clientIp,
+        deviceLabel: deviceLabel,
+      );
+
+      if (requestId == null) {
+        return Response(
+          429,
+          body: jsonEncode({'error': 'Too many pending approval requests. Please wait or try again later.'}),
+          headers: {'content-type': 'application/json'},
+        );
+      }
+
       return Response.ok(
         jsonEncode({'requestId': requestId}),
         headers: {'content-type': 'application/json'},
@@ -119,7 +211,7 @@ class EmbeddedServer {
 
     router.get('/api/auth/poll-approval', (Request request) {
       final requestId = request.url.queryParameters['requestId'] ?? '';
-      final status = sessionManager.getApprovalStatus(requestId);
+      final status = sessionManager.pollApprovalStatus(requestId);
 
       Map<String, String> headers = {'content-type': 'application/json'};
 
@@ -154,27 +246,14 @@ class EmbeddedServer {
     });
 
     router.get('/manifest.json', (Request request) async {
-      try {
-        String manifestContent = '';
-        try {
-          manifestContent = await rootBundle.loadString('assets/web/manifest.json');
-        } catch (_) {}
-        if (manifestContent.isEmpty) {
-          final file = File('assets/web/manifest.json');
-          if (await file.exists()) {
-            manifestContent = await file.readAsString();
-          }
-        }
-        if (manifestContent.isNotEmpty) {
-          return Response.ok(
-            manifestContent,
-            headers: {'content-type': 'application/manifest+json; charset=utf-8'},
-          );
-        }
-        return Response.notFound('manifest.json not found');
-      } catch (e) {
-        return Response.notFound('manifest.json not found');
+      final manifestContent = await _getManifestContent();
+      if (manifestContent.isNotEmpty) {
+        return Response.ok(
+          manifestContent,
+          headers: {'content-type': 'application/manifest+json; charset=utf-8'},
+        );
       }
+      return Response.notFound('manifest.json not found');
     });
 
     router.get('/api/text', (Request request) {
@@ -204,32 +283,70 @@ class EmbeddedServer {
 
     router.get('/api/download-all', (Request request) async {
       final sharedFiles = storageService.sharedFiles;
-      final archive = Archive();
+      if (sharedFiles.isEmpty) {
+        return Response.badRequest(
+          body: jsonEncode({'error': 'No files available to download'}),
+          headers: {'content-type': 'application/json'},
+        );
+      }
+
+      final tempDir = Directory.systemTemp;
+      final tempZipFile = File('${tempDir.path}/LibreShare_Files_${DateTime.now().microsecondsSinceEpoch}.zip');
+
+      final encoder = ZipFileEncoder();
+      encoder.create(tempZipFile.path, level: ZipFileEncoder.store);
+
+      final addedNames = <String>{};
 
       for (final sharedFile in sharedFiles) {
         final file = File(sharedFile.filePath);
         if (await file.exists()) {
-          final bytes = await file.readAsBytes();
-          archive.addFile(ArchiveFile(sharedFile.name, bytes.length, bytes));
+          String entryName = sharedFile.name;
+          int counter = 1;
+
+          final dotIdx = entryName.lastIndexOf('.');
+          String base = dotIdx > 0 ? entryName.substring(0, dotIdx) : entryName;
+          String ext = dotIdx > 0 ? entryName.substring(dotIdx) : '';
+
+          while (addedNames.contains(entryName)) {
+            entryName = '$base ($counter)$ext';
+            counter++;
+          }
+          addedNames.add(entryName);
+
+          await encoder.addFile(file, entryName);
         }
       }
 
-      final encoder = ZipEncoder();
-      final zipBytes = encoder.encode(archive);
+      await encoder.close();
+
+      final stat = await tempZipFile.stat();
+
+      Stream<List<int>> streamWithCleanup() async* {
+        try {
+          yield* tempZipFile.openRead();
+        } finally {
+          try {
+            if (await tempZipFile.exists()) {
+              await tempZipFile.delete();
+            }
+          } catch (_) {}
+        }
+      }
 
       return Response.ok(
-        zipBytes,
+        streamWithCleanup(),
         headers: {
           'content-type': 'application/zip',
+          'content-length': stat.size.toString(),
           'content-disposition': 'attachment; filename="LibreShare_Files.zip"',
           'x-content-type-options': 'nosniff',
         },
       );
     });
 
-
-    router.get('/api/download/<fileId>', (Request request, String fileId) async {
-      final sharedFile = storageService.getFileById(fileId);
+    router.get('/api/download/<id>', (Request request, String id) async {
+      final sharedFile = storageService.getFileById(id);
       if (sharedFile == null) {
         return Response.notFound(jsonEncode({'error': 'File not found'}));
       }
@@ -245,7 +362,7 @@ class EmbeddedServer {
           : lookupMimeType(sharedFile.filePath) ?? 'application/octet-stream';
 
       final asciiName = sharedFile.name.replaceAll(RegExp(r'[^\x20-\x7E]'), '_').replaceAll('"', '\\"');
-      final encodedName = Uri.encodeComponent(sharedFile.name);
+      final encodedName = _rfc5987Encode(sharedFile.name);
       final contentDisposition = 'attachment; filename="$asciiName"; filename*=UTF-8\'\'$encodedName';
 
       return Response.ok(
@@ -258,7 +375,6 @@ class EmbeddedServer {
         },
       );
     });
-
 
     router.get('/eruda.min.js', (Request request) async {
       try {
@@ -284,15 +400,48 @@ class EmbeddedServer {
       }
     });
 
-    router.get('/api/upload/status', (Request request) async {
-      final rawFilename = request.url.queryParameters['filename'] ??
-          request.url.queryParameters['uploadId'] ??
-          '';
-      var filename = rawFilename;
+    router.post('/api/upload/init', (Request request) async {
       try {
-        filename = Uri.decodeComponent(rawFilename);
+        final bodyText = await request.readAsString();
+        final json = jsonDecode(bodyText) as Map<String, dynamic>;
+        final filename = json['name']?.toString() ?? 'upload_${DateTime.now().millisecondsSinceEpoch}.bin';
+        final totalBytes = int.tryParse(json['size']?.toString() ?? '0') ?? 0;
+
+        final uploadId = await storageService.initUpload(
+          filename: filename,
+          totalBytes: totalBytes,
+        );
+
+        return Response.ok(
+          jsonEncode({'uploadId': uploadId}),
+          headers: {'content-type': 'application/json'},
+        );
+      } on MaxBytesExceededException catch (e) {
+        return Response(
+          400,
+          body: jsonEncode({'error': e.message}),
+          headers: {'content-type': 'application/json'},
+        );
+      } catch (e) {
+        return Response.badRequest(
+          body: jsonEncode({'error': 'Invalid init upload request'}),
+          headers: {'content-type': 'application/json'},
+        );
+      }
+    });
+
+    router.get('/api/upload/status', (Request request) async {
+      final uploadIdOrFilename = request.url.queryParameters['uploadId'] ??
+          request.url.queryParameters['filename'] ??
+          request.headers['x-upload-id'] ??
+          '';
+
+      var target = uploadIdOrFilename;
+      try {
+        target = Uri.decodeComponent(uploadIdOrFilename);
       } catch (_) {}
-      final offset = await storageService.getUploadOffset(filename: filename);
+
+      final offset = await storageService.getUploadOffset(uploadIdOrFilename: target);
       return Response.ok(
         jsonEncode({'offset': offset}),
         headers: {'content-type': 'application/json'},
@@ -300,27 +449,30 @@ class EmbeddedServer {
     });
 
     router.post('/api/upload/chunk', (Request request) async {
-      final rawFilename = request.headers['x-file-name'] ??
+      final uploadId = request.headers['x-upload-id'] ??
+          request.headers['x-file-name'] ??
+          request.url.queryParameters['uploadId'] ??
           request.url.queryParameters['filename'] ??
           '';
-      var filename = rawFilename;
+
+      var targetId = uploadId;
       try {
-        filename = Uri.decodeComponent(rawFilename);
+        targetId = Uri.decodeComponent(uploadId);
       } catch (_) {}
 
       final chunkOffset = int.tryParse(request.headers['x-chunk-offset'] ?? '0') ?? 0;
       final totalBytes = int.tryParse(request.headers['x-total-bytes'] ?? '0') ?? 0;
 
-      if (filename.isEmpty) {
+      if (targetId.isEmpty) {
         return Response.badRequest(
-          body: jsonEncode({'error': 'Missing X-File-Name header or filename parameter'}),
+          body: jsonEncode({'error': 'Missing X-Upload-Id or X-File-Name header'}),
           headers: {'content-type': 'application/json'},
         );
       }
 
       try {
         final result = await storageService.appendChunk(
-          filename: filename,
+          uploadId: targetId,
           stream: request.read(),
           totalBytes: totalBytes,
           chunkOffset: chunkOffset,
@@ -329,25 +481,39 @@ class EmbeddedServer {
           jsonEncode(result),
           headers: {'content-type': 'application/json'},
         );
+      } on OffsetMismatchException catch (e) {
+        return Response(
+          409,
+          body: jsonEncode({'offset': e.currentOffset}),
+          headers: {'content-type': 'application/json'},
+        );
+      } on MaxBytesExceededException catch (e) {
+        return Response(
+          413,
+          body: jsonEncode({'error': e.message}),
+          headers: {'content-type': 'application/json'},
+        );
       } catch (e) {
         return Response.internalServerError(
-          body: jsonEncode({'error': 'Chunk upload failed: '}),
+          body: jsonEncode({'error': 'Internal server error'}),
           headers: {'content-type': 'application/json'},
         );
       }
     });
 
     router.post('/api/upload/cancel', (Request request) async {
-      final rawFilename = request.headers['x-file-name'] ??
-          request.url.queryParameters['filename'] ??
+      final uploadId = request.headers['x-upload-id'] ??
+          request.headers['x-file-name'] ??
           request.url.queryParameters['uploadId'] ??
+          request.url.queryParameters['filename'] ??
           '';
-      var filename = rawFilename;
+
+      var targetId = uploadId;
       try {
-        filename = Uri.decodeComponent(rawFilename);
+        targetId = Uri.decodeComponent(uploadId);
       } catch (_) {}
 
-      await storageService.cancelUpload(filename: filename);
+      await storageService.cancelUpload(uploadId: targetId);
       return Response.ok(
         jsonEncode({'status': 'cancelled'}),
         headers: {'content-type': 'application/json'},
@@ -402,7 +568,7 @@ class EmbeddedServer {
           );
         } catch (e) {
           return Response.internalServerError(
-            body: jsonEncode({'error': 'Upload failed: $e'}),
+            body: jsonEncode({'error': 'Internal server error'}),
             headers: {'content-type': 'application/json'},
           );
         }
@@ -441,7 +607,7 @@ class EmbeddedServer {
           );
         } catch (e) {
           return Response.internalServerError(
-            body: jsonEncode({'error': 'Upload failed: $e'}),
+            body: jsonEncode({'error': 'Internal server error'}),
             headers: {'content-type': 'application/json'},
           );
         }
@@ -453,7 +619,7 @@ class EmbeddedServer {
         return (Request request) async {
           final path = request.url.path;
 
-          if (path == '' || path == '/' || path == 'eruda.min.js' || path == 'manifest.json') {
+          if (path == '' || path == '/' || path == 'manifest.json') {
             return innerHandler(request);
           }
 
@@ -510,13 +676,12 @@ class EmbeddedServer {
       _server = await io.serve(handler, InternetAddress.anyIPv4, port);
     } catch (e) {
       if (port != 0) {
-        // Fallback to dynamic port allocation
         _server = await io.serve(handler, InternetAddress.anyIPv4, 0);
       } else {
         rethrow;
       }
     }
-        try {
+    try {
       await WakelockPlus.enable();
     } catch (_) {}
 

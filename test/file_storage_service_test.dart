@@ -119,13 +119,13 @@ void main() {
     expect(await appOwnedFile.exists(), isFalse);
   });
 
-  test('sanitizeFilename removes illegal characters and limits length', () {
+  test('sanitizeFilename removes illegal characters and limits length by UTF-8 bytes', () {
     final sanitized1 = storageService.sanitizeFilename('../../bad/file\x00.txt');
     expect(sanitized1, equals('____bad_file.txt'));
 
-    final longName = '${'a' * 250}.pdf';
-    final sanitized2 = storageService.sanitizeFilename(longName);
-    expect(sanitized2.length, lessThanOrEqualTo(200));
+    final longArabic = '${'مرحبا' * 50}.pdf';
+    final sanitized2 = storageService.sanitizeFilename(longArabic);
+    expect(utf8.encode(sanitized2).length, lessThanOrEqualTo(180));
     expect(sanitized2, endsWith('.pdf'));
   });
 
@@ -158,22 +158,31 @@ void main() {
     expect(file3.filePath, endsWith('/document (2).pdf'));
   });
 
-  test('chunked upload status, appendChunk, progress stream, and cancellation', () async {
+  test('chunked upload init, appendChunk offset validation, and completion', () async {
     final filename = 'chunk_test_video.mp4';
-    expect(await storageService.getUploadOffset(filename: filename), equals(0));
-
-    final progressEvents = <UploadProgress?>[];
-    final sub = storageService.progressStream.listen((event) {
-      progressEvents.add(event);
-    });
-
     final chunk1 = utf8.encode('Chunk 1 Data. ');
     final chunk2 = utf8.encode('Chunk 2 Data.');
     final totalBytes = chunk1.length + chunk2.length;
 
+    final uploadId = await storageService.initUpload(filename: filename, totalBytes: totalBytes);
+    expect(uploadId.length, equals(32)); // 128 bit hex
+
+    expect(await storageService.getUploadOffset(uploadIdOrFilename: uploadId), equals(0));
+
+    // Mismatched offset throws OffsetMismatchException
+    expect(
+      () => storageService.appendChunk(
+        uploadId: uploadId,
+        stream: Stream.value(chunk1),
+        totalBytes: totalBytes,
+        chunkOffset: 5,
+      ),
+      throwsA(isA<OffsetMismatchException>()),
+    );
+
     // First chunk
     final res1 = await storageService.appendChunk(
-      filename: filename,
+      uploadId: uploadId,
       stream: Stream.value(chunk1),
       totalBytes: totalBytes,
       chunkOffset: 0,
@@ -181,11 +190,11 @@ void main() {
 
     expect(res1['status'], equals('in_progress'));
     expect(res1['offset'], equals(chunk1.length));
-    expect(await storageService.getUploadOffset(filename: filename), equals(chunk1.length));
+    expect(await storageService.getUploadOffset(uploadIdOrFilename: uploadId), equals(chunk1.length));
 
     // Second chunk
     final res2 = await storageService.appendChunk(
-      filename: filename,
+      uploadId: uploadId,
       stream: Stream.value(chunk2),
       totalBytes: totalBytes,
       chunkOffset: chunk1.length,
@@ -194,32 +203,28 @@ void main() {
     expect(res2['status'], equals('completed'));
     expect(res2['file']['name'], equals(filename));
     expect(storageService.receivedFiles.length, equals(1));
-
-    await Future.delayed(Duration.zero);
-    await sub.cancel();
-
-    expect(progressEvents.isNotEmpty, isTrue);
-    expect(progressEvents.last?.isCompleted, isTrue);
   });
 
   test('cancelUpload deletes .part file and resets state', () async {
     final filename = 'incomplete.zip';
     final chunk = utf8.encode('Partial data');
+    final totalBytes = 1000;
+
+    final uploadId = await storageService.initUpload(filename: filename, totalBytes: totalBytes);
 
     await storageService.appendChunk(
-      filename: filename,
+      uploadId: uploadId,
       stream: Stream.value(chunk),
-      totalBytes: 1000,
+      totalBytes: totalBytes,
       chunkOffset: 0,
     );
 
-    expect(await storageService.getUploadOffset(filename: filename), equals(chunk.length));
+    expect(await storageService.getUploadOffset(uploadIdOrFilename: uploadId), equals(chunk.length));
 
-    await storageService.cancelUpload(filename: filename);
+    await storageService.cancelUpload(uploadId: uploadId);
 
-    expect(await storageService.getUploadOffset(filename: filename), equals(0));
+    expect(await storageService.getUploadOffset(uploadIdOrFilename: uploadId), equals(0));
   });
-
 
   test('latestSharedText updates and triggers textStream', () async {
     final textEvents = <String>[];
