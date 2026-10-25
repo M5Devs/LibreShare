@@ -607,12 +607,14 @@
     // Formatting & Metrics Helpers
     function formatBytes(bytes) {
       if (bytes <= 0 || !bytes || isNaN(bytes) || !isFinite(bytes)) return '0 B';
-      const k = 1024;
-      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-      const i = Math.floor(Math.log(bytes) / Math.log(k));
-      if (i < 0) return '0 B';
-      const index = Math.min(i, sizes.length - 1);
-      return parseFloat((bytes / Math.pow(k, index)).toFixed(1)) + ' ' + sizes[index];
+      if (bytes < 1024) return Math.round(bytes) + ' B';
+      if (bytes < 1024 * 1024) {
+        return (bytes / 1024).toFixed(2) + ' KB';
+      }
+      if (bytes < 1024 * 1024 * 1024) {
+        return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+      }
+      return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
     }
 
     function formatSpeed(bytesPerSec) {
