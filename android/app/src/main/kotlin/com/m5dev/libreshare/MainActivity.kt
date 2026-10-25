@@ -1,5 +1,6 @@
 package com.m5dev.libreshare
 
+import android.media.MediaScannerConnection
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -41,6 +42,15 @@ class MainActivity : FlutterActivity() {
                     "stop" -> {
                         LibreShareService.stop(this)
                         result.success(true)
+                    }
+                    "scanMediaFile" -> {
+                        val path = call.argument<String>("path")
+                        if (path != null) {
+                            MediaScannerConnection.scanFile(applicationContext, arrayOf(path), null) { scannedPath, uri -> }
+                            result.success(true)
+                        } else {
+                            result.error("INVALID_PATH", "Path is null", null)
+                        }
                     }
                     else -> result.notImplemented()
                 }

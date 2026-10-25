@@ -240,4 +240,16 @@ void main() {
 
     expect(textEvents, equals(['Hello World']));
   });
+
+  test("receivedFiles filters out .part files", () async {
+    final stream1 = Stream.value(utf8.encode("Hello Video"));
+    await storageService.saveStream(
+      filename: "normal.mp4",
+      stream: stream1,
+      mimeType: "video/mp4",
+    );
+
+    expect(storageService.receivedFiles.length, equals(1));
+    expect(storageService.receivedFiles.first.name, equals("normal.mp4"));
+  });
 }

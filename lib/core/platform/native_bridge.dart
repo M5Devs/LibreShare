@@ -23,4 +23,11 @@ class NativeBridge {
       await _serviceChannel.invokeMethod('stop');
     } catch (_) {}
   }
+
+  static Future<void> scanMediaFile(String path) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _serviceChannel.invokeMethod('scanMediaFile', {'path': path});
+    } catch (_) {}
+  }
 }

@@ -1,20 +1,23 @@
-import 'dart:math';
-
 class TransferMetrics {
   /// Formats byte counts cleanly (e.g., "0 B", "38.4 MB", "1.2 GB").
   static String formatSize(num bytes) {
     if (bytes <= 0 || bytes.isNaN || bytes.isInfinite) return '0 B';
-    const k = 1024.0;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    int i = (log(bytes) / log(k)).floor();
-    if (i < 0) i = 0;
-    if (i >= sizes.length) i = sizes.length - 1;
+    if (bytes < 1024) return '${bytes.toInt()} B';
 
-    final value = bytes / pow(k, i);
-    if (i == 0) {
-      return '${bytes.toInt()} B';
+    const k = 1024.0;
+    if (bytes < k * k) {
+      final kb = bytes / k;
+      return '${kb.toStringAsFixed(2)} KB';
+    } else if (bytes < k * k * k) {
+      final mb = bytes / (k * k);
+      return '${mb.toStringAsFixed(2)} MB';
+    } else if (bytes < k * k * k * k) {
+      final gb = bytes / (k * k * k);
+      return '${gb.toStringAsFixed(2)} GB';
+    } else {
+      final tb = bytes / (k * k * k * k);
+      return '${tb.toStringAsFixed(2)} TB';
     }
-    return '${value.toStringAsFixed(1)} ${sizes[i]}';
   }
 
   /// Formats speed cleanly (e.g., "0 B/s", "450.0 KB/s", "14.2 MB/s").

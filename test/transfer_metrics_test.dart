@@ -10,16 +10,16 @@ void main() {
       expect(TransferMetrics.formatSize(double.infinity), equals('0 B'));
 
       expect(TransferMetrics.formatSize(500), equals('500 B'));
-      expect(TransferMetrics.formatSize(1024), equals('1.0 KB'));
-      expect(TransferMetrics.formatSize(1500 * 1024), equals('1.5 MB'));
-      expect(TransferMetrics.formatSize(2.5 * 1024 * 1024 * 1024), equals('2.5 GB'));
+      expect(TransferMetrics.formatSize(1024), equals('1.00 KB'));
+      expect(TransferMetrics.formatSize(1500 * 1024), equals('1.46 MB'));
+      expect(TransferMetrics.formatSize(2.5 * 1024 * 1024 * 1024), equals('2.50 GB'));
     });
 
     test('formatSpeed formats bytes per second cleanly', () {
       expect(TransferMetrics.formatSpeed(0), equals('0 B/s'));
       expect(TransferMetrics.formatSpeed(-50), equals('0 B/s'));
-      expect(TransferMetrics.formatSpeed(500 * 1024), equals('500.0 KB/s'));
-      expect(TransferMetrics.formatSpeed(14.2 * 1024 * 1024), equals('14.2 MB/s'));
+      expect(TransferMetrics.formatSpeed(500 * 1024), equals('500.00 KB/s'));
+      expect(TransferMetrics.formatSpeed(14.2 * 1024 * 1024), equals('14.20 MB/s'));
     });
 
     test('formatEta formats remaining seconds into human-readable string', () {

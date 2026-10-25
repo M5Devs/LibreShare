@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'package:path_provider/path_provider.dart';
 import 'package:mime/mime.dart';
+import '../platform/native_bridge.dart';
 import '../utils/transfer_metrics.dart';
 import 'shared_file.dart';
 
@@ -134,7 +135,9 @@ class FileStorageService {
   }
 
   List<SharedFile> get sharedFiles => List.unmodifiable(_sharedFiles);
-  List<SharedFile> get receivedFiles => List.unmodifiable(_receivedFiles);
+  List<SharedFile> get receivedFiles => List.unmodifiable(
+      _receivedFiles.where((f) => !f.name.endsWith('.part') && !f.filePath.endsWith('.part')),
+    );
   Stream<UploadProgress?> get progressStream => _progressController.stream;
 
   Future<void> cleanOrphanedPartFiles() async {
@@ -531,6 +534,14 @@ class FileStorageService {
         _releaseReservedFilename(finalFilePath);
       }
 
+      if (await partFile.exists()) {
+        try {
+          await partFile.delete();
+        } catch (_) {}
+      }
+
+      await NativeBridge.scanMediaFile(finalFile.path);
+
       final detectedMime = lookupMimeType(finalFile.path) ?? 'application/octet-stream';
 
       final fileId = SharedFile.generateId();
@@ -653,6 +664,14 @@ class FileStorageService {
         _releaseReservedFilename(finalFilePath);
       }
 
+      if (await partFile.exists()) {
+        try {
+          await partFile.delete();
+        } catch (_) {}
+      }
+
+      await NativeBridge.scanMediaFile(finalFile.path);
+
       final detectedMime = mimeType ?? lookupMimeType(finalFile.path) ?? 'application/octet-stream';
 
       final sharedFile = SharedFile(
@@ -713,6 +732,14 @@ class FileStorageService {
   }
 
   void clear() {
+    for (final session in _activeUploads.values) {
+      try {
+        final partFile = File(session.partFilePath);
+        if (partFile.existsSync()) {
+          partFile.deleteSync();
+        }
+      } catch (_) {}
+    }
     for (final file in _sharedFiles) {
       if (file.ownedByApp) {
         try {
