@@ -192,19 +192,62 @@
       display: none;
     }
 
+    /* Session & Dashboard Styles */
     .progress-section {
       background-color: var(--card-bg);
-      border-radius: 12px;
+      border-radius: 16px;
       padding: 20px;
       display: none;
       flex-direction: column;
-      gap: 12px;
+      gap: 16px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
     }
 
-    .progress-info {
+    .session-summary-card {
+      background: linear-gradient(135deg, #1e1e2e 0%, #2a2a3d 100%);
+      border: 1.5px solid var(--accent-color);
+      border-radius: 12px;
+      padding: 16px 20px;
+      box-shadow: 0 4px 16px rgba(187, 134, 252, 0.15);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .session-header {
       display: flex;
       justify-content: space-between;
-      font-size: 0.95rem;
+      align-items: center;
+    }
+
+    .session-header h2 {
+      font-size: 1.1rem;
+      color: #ffffff;
+      font-weight: 700;
+    }
+
+    .session-elapsed-badge {
+      font-size: 0.85rem;
+      background-color: rgba(255, 255, 255, 0.1);
+      padding: 4px 10px;
+      border-radius: 20px;
+      color: var(--accent-color);
+      font-weight: 600;
+    }
+
+    .session-metrics-grid {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.85rem;
+      color: #ccc;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .badge-accent {
+      color: #bb86fc;
+      font-weight: 600;
     }
 
     .progress-bar-container {
@@ -219,7 +262,11 @@
       height: 100%;
       width: 0%;
       background-color: var(--progress-fill);
-      transition: width 0.1s linear;
+      transition: width 0.15s ease-out;
+    }
+
+    .gradient-bar {
+      background: linear-gradient(90deg, #bb86fc 0%, #3700b3 100%) !important;
     }
 
     .file-list-section {
@@ -325,35 +372,72 @@
       background-color: rgba(187, 134, 252, 0.1);
     }
 
+    /* Wide Individual Transfer Card */
     .upload-card {
-      background-color: var(--card-bg);
+      background-color: #1a1a26;
       border: 1px solid var(--border-color);
       border-radius: 12px;
       padding: 16px;
       display: flex;
       flex-direction: column;
+      gap: 12px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    .card-top-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
       gap: 10px;
     }
 
-    .upload-card-header {
+    .card-top-left {
       display: flex;
-      justify-content: space-between;
       align-items: center;
+      gap: 10px;
+      overflow: hidden;
+      max-width: 80%;
     }
 
-    .upload-card-title {
+    .category-icon {
+      font-size: 1.3rem;
+      flex-shrink: 0;
+    }
+
+    .truncated-filename {
       font-weight: 600;
       font-size: 0.95rem;
       color: var(--text-color);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      max-width: 60%;
     }
 
-    .upload-card-meta {
-      font-size: 0.85rem;
+    .percent-badge {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--accent-color);
+      background-color: rgba(187, 134, 252, 0.15);
+      padding: 3px 8px;
+      border-radius: 6px;
+      flex-shrink: 0;
+    }
+
+    .card-bottom-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.82rem;
       color: #aaa;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .bottom-left-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
     }
 
     .upload-card-controls {
@@ -449,8 +533,25 @@
         <input type="file" id="file-input" multiple />
       </div>
 
+      <!-- Session & Active Uploads Dashboard -->
       <section class="progress-section" id="progress-section" style="display: none;">
-        <h2 style="font-size: 1.1rem; color: var(--text-color); margin-bottom: 8px;">Active Uploads</h2>
+        <!-- Top Session Summary Card -->
+        <div class="session-summary-card" id="session-summary-card">
+          <div class="session-header">
+            <h2 id="session-status-text">Transferring (0 of 0 files)</h2>
+            <span class="session-elapsed-badge" id="session-elapsed-text">⏱️ 00:00</span>
+          </div>
+          <div class="progress-bar-container" style="height: 12px;">
+            <div class="progress-bar-fill gradient-bar" id="session-bar-fill" style="width: 0%;"></div>
+          </div>
+          <div class="session-metrics-grid">
+            <span id="session-size-text">0 B / 0 B</span>
+            <span class="badge-accent" id="session-speed-text">⚡ 0 B/s</span>
+            <span id="session-eta-text">⏳ ~0s remaining</span>
+          </div>
+        </div>
+
+        <h3 style="font-size: 1.0rem; color: var(--text-color); margin-top: 4px;">Active Transfer Queue</h3>
         <div id="upload-cards-container" style="display: flex; flex-direction: column; gap: 12px; width: 100%;"></div>
       </section>
 
@@ -489,9 +590,6 @@
     const fileListEl = document.getElementById('file-list');
     const refreshBtn = document.getElementById('refresh-btn');
     const progressSection = document.getElementById('progress-section');
-    const progressFilename = document.getElementById('progress-filename');
-    const progressPercent = document.getElementById('progress-percent');
-    const progressBarFill = document.getElementById('progress-bar-fill');
 
     let pollInterval = null;
 
@@ -506,12 +604,86 @@
       appContent.style.display = 'none';
     }
 
+    // Formatting & Metrics Helpers
     function formatBytes(bytes) {
-      if (bytes === 0 || !bytes) return '0 Bytes';
+      if (bytes <= 0 || !bytes || isNaN(bytes) || !isFinite(bytes)) return '0 B';
       const k = 1024;
-      const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
       const i = Math.floor(Math.log(bytes) / Math.log(k));
-      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+      if (i < 0) return '0 B';
+      const index = Math.min(i, sizes.length - 1);
+      return parseFloat((bytes / Math.pow(k, index)).toFixed(1)) + ' ' + sizes[index];
+    }
+
+    function formatSpeed(bytesPerSec) {
+      if (!bytesPerSec || bytesPerSec <= 0 || isNaN(bytesPerSec) || !isFinite(bytesPerSec)) {
+        return '0 B/s';
+      }
+      return formatBytes(bytesPerSec) + '/s';
+    }
+
+    function formatEta(seconds) {
+      if (!seconds || seconds <= 0 || isNaN(seconds) || !isFinite(seconds)) {
+        return '~0s remaining';
+      }
+      const total = Math.round(seconds);
+      if (total <= 0) return '~0s remaining';
+
+      const hrs = Math.floor(total / 3600);
+      const mins = Math.floor((total % 3600) / 60);
+      const secs = total % 60;
+
+      if (hrs > 0) {
+        return `~${hrs}h ${mins}m remaining`;
+      } else if (mins > 0) {
+        return `~${mins}m ${secs}s remaining`;
+      } else {
+        return `~${secs}s remaining`;
+      }
+    }
+
+    function formatDuration(totalSeconds) {
+      const sec = Math.max(0, Math.floor(totalSeconds));
+      const mins = String(Math.floor(sec / 60)).padStart(2, '0');
+      const secs = String(sec % 60).padStart(2, '0');
+      return `${mins}:${secs}`;
+    }
+
+    function middleTruncate(filename, maxLength = 24) {
+      if (!filename || filename.length <= maxLength || maxLength < 5) return filename || '';
+      const dotIdx = filename.lastIndexOf('.');
+      let baseName = filename;
+      let ext = '';
+      if (dotIdx > 0 && dotIdx > filename.length - 10) {
+        baseName = filename.substring(0, dotIdx);
+        ext = filename.substring(dotIdx);
+      }
+      const targetLen = maxLength - ext.length;
+      if (targetLen <= 5) {
+        const front = Math.floor((maxLength - 3) / 2);
+        const back = maxLength - 3 - front;
+        return filename.substring(0, front) + '...' + filename.substring(filename.length - back);
+      }
+      const frontLen = Math.floor((targetLen - 3) / 2);
+      const backLen = targetLen - 3 - frontLen;
+      return baseName.substring(0, frontLen) + '...' + baseName.substring(baseName.length - backLen) + ext;
+    }
+
+    function getCategoryInfo(filename) {
+      const dotIdx = filename.lastIndexOf('.');
+      const ext = dotIdx !== -1 ? filename.substring(dotIdx + 1).toLowerCase() : '';
+      switch (ext) {
+        case 'mp4': case 'mkv': case 'avi': case 'mov': case '3gp':
+          return { category: 'Videos', icon: '🎥' };
+        case 'jpg': case 'jpeg': case 'png': case 'gif': case 'webp':
+          return { category: 'Images', icon: '🖼️' };
+        case 'apk': case 'xapk':
+          return { category: 'Apps', icon: '📱' };
+        case 'mp3': case 'wav': case 'm4a': case 'ogg':
+          return { category: 'Audio', icon: '🎵' };
+        default:
+          return { category: 'Documents', icon: '📄' };
+      }
     }
 
     async function checkAuthAndFetchFiles() {
@@ -663,6 +835,84 @@
     const CHUNK_SIZE = 2 * 1024 * 1024; // 2 MiB
     const uploadTasks = new Map();
 
+    const sessionState = {
+      startTime: null,
+      timerId: null,
+      totalSessionBytes: 0,
+      totalTransferredBytes: 0,
+    };
+
+    function startSessionTimerIfNeeded() {
+      if (!sessionState.startTime) {
+        sessionState.startTime = Date.now();
+      }
+      if (!sessionState.timerId) {
+        sessionState.timerId = setInterval(() => {
+          updateSessionSummaryUI();
+        }, 1000);
+      }
+    }
+
+    function updateSessionSummaryUI() {
+      const allTasks = Array.from(uploadTasks.values());
+      if (allTasks.length === 0) {
+        document.getElementById('progress-section').style.display = 'none';
+        if (sessionState.timerId) {
+          clearInterval(sessionState.timerId);
+          sessionState.timerId = null;
+        }
+        sessionState.startTime = null;
+        return;
+      }
+
+      document.getElementById('progress-section').style.display = 'flex';
+
+      const totalFiles = allTasks.length;
+      const completedFiles = allTasks.filter(t => t.status === 'completed').length;
+      const isAllCompleted = completedFiles === totalFiles;
+
+      let totalSessionBytes = 0;
+      let totalTransferredBytes = 0;
+      let aggregateSpeed = 0;
+
+      allTasks.forEach(task => {
+        totalSessionBytes += task.totalBytes;
+        totalTransferredBytes += task.currentOffset;
+        if (task.status === 'uploading') {
+          aggregateSpeed += task.smoothedSpeed;
+        }
+      });
+
+      const sessionPercent = totalSessionBytes > 0
+        ? Math.min(100, (totalTransferredBytes / totalSessionBytes) * 100)
+        : (isAllCompleted ? 100 : 0);
+
+      const elapsedSec = sessionState.startTime ? (Date.now() - sessionState.startTime) / 1000 : 0;
+      const elapsedFormatted = formatDuration(elapsedSec);
+
+      const remainingBytes = totalSessionBytes - totalTransferredBytes;
+      const aggregateEtaSec = aggregateSpeed > 0 ? remainingBytes / aggregateSpeed : 0;
+
+      const statusTextEl = document.getElementById('session-status-text');
+      const elapsedTextEl = document.getElementById('session-elapsed-text');
+      const barFillEl = document.getElementById('session-bar-fill');
+      const sizeTextEl = document.getElementById('session-size-text');
+      const speedTextEl = document.getElementById('session-speed-text');
+      const etaTextEl = document.getElementById('session-eta-text');
+
+      if (isAllCompleted) {
+        statusTextEl.textContent = `Completed (${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} in ${elapsedFormatted})`;
+      } else {
+        statusTextEl.textContent = `Transferring (${completedFiles} of ${totalFiles} files)`;
+      }
+
+      elapsedTextEl.textContent = `⏱️ ${elapsedFormatted}`;
+      if (barFillEl) barFillEl.style.width = sessionPercent.toFixed(1) + '%';
+      if (sizeTextEl) sizeTextEl.textContent = `${formatBytes(totalTransferredBytes)} / ${formatBytes(totalSessionBytes)}`;
+      if (speedTextEl) speedTextEl.textContent = `⚡ ${formatSpeed(aggregateSpeed)}`;
+      if (etaTextEl) etaTextEl.textContent = isAllCompleted ? `⏳ ~0s remaining` : `⏳ ${formatEta(aggregateEtaSec)}`;
+    }
+
     class UploadTask {
       constructor(file) {
         this.file = file;
@@ -676,35 +926,45 @@
         this.currentXhr = null;
         this.lastTime = Date.now();
         this.lastBytes = 0;
-        this.speedStr = '0 B/s';
+        this.smoothedSpeed = 0.0;
+        this.etaSec = 0.0;
+
+        const catInfo = getCategoryInfo(this.filename);
+        this.category = catInfo.category;
+        this.icon = catInfo.icon;
 
         this.createCardElement();
       }
 
       createCardElement() {
         const container = document.getElementById('upload-cards-container');
-        document.getElementById('progress-section').style.display = 'block';
+        startSessionTimerIfNeeded();
+
+        const truncatedName = middleTruncate(this.filename, 28);
 
         this.card = document.createElement('div');
         this.card.className = 'upload-card';
         this.card.innerHTML = `
-          <div class="upload-card-header">
-            <span class="upload-card-title" title="${this.filename}">${this.filename}</span>
+          <div class="card-top-row">
+            <div class="card-top-left">
+              <span class="category-icon">${this.icon}</span>
+              <span class="truncated-filename" title="${this.filename}">${truncatedName}</span>
+            </div>
+            <span class="percent-badge" id="percent-${this.cardId}">0%</span>
+          </div>
+          <div class="progress-bar-container">
+            <div class="progress-bar-fill gradient-bar" id="bar-${this.cardId}" style="width: 0%;"></div>
+          </div>
+          <div class="card-bottom-row">
+            <div class="bottom-left-info">
+              <span id="meta-size-${this.cardId}">0 B / ${formatBytes(this.totalBytes)}</span>
+              <span class="badge-accent" id="meta-speed-${this.cardId}">⚡ 0 B/s</span>
+              <span id="meta-eta-${this.cardId}">⏳ ~0s remaining</span>
+            </div>
             <div class="upload-card-controls">
               <button class="btn-small btn-pause" id="btn-toggle-${this.cardId}">Pause ⏸️</button>
               <button class="btn-small btn-cancel" id="btn-cancel-${this.cardId}">Cancel ❌</button>
             </div>
-          </div>
-          <div class="upload-card-meta">
-            <span id="meta-size-${this.cardId}">0 B / ${formatBytes(this.totalBytes)}</span> •
-            <span id="meta-speed-${this.cardId}">0 B/s</span>
-          </div>
-          <div class="progress-bar-container">
-            <div class="progress-bar-fill" id="bar-${this.cardId}" style="width: 0%;"></div>
-          </div>
-          <div class="progress-info">
-            <span id="status-${this.cardId}">Uploading...</span>
-            <span id="percent-${this.cardId}">0%</span>
           </div>
         `;
         container.appendChild(this.card);
@@ -723,36 +983,38 @@
         this.cancelBtn.addEventListener('click', () => {
           this.cancel();
         });
+
+        updateSessionSummaryUI();
       }
 
       updateUI() {
         if (!this.card) return;
-        const percent = Math.min(100, Math.round((this.currentOffset / this.totalBytes) * 100)) || 0;
+        const percent = Math.min(100, Math.round((this.currentOffset / this.totalBytes) * 100)) || (this.status === 'completed' ? 100 : 0);
         const bar = this.card.querySelector(`#bar-${this.cardId}`);
         const percentEl = this.card.querySelector(`#percent-${this.cardId}`);
         const sizeEl = this.card.querySelector(`#meta-size-${this.cardId}`);
         const speedEl = this.card.querySelector(`#meta-speed-${this.cardId}`);
-        const statusEl = this.card.querySelector(`#status-${this.cardId}`);
+        const etaEl = this.card.querySelector(`#meta-eta-${this.cardId}`);
 
         if (bar) bar.style.width = percent + '%';
         if (percentEl) percentEl.textContent = percent + '%';
         if (sizeEl) sizeEl.textContent = `${formatBytes(this.currentOffset)} / ${formatBytes(this.totalBytes)}`;
-        if (speedEl) speedEl.textContent = this.speedStr;
+        if (speedEl) speedEl.textContent = `⚡ ${formatSpeed(this.smoothedSpeed)}`;
+        if (etaEl) etaEl.textContent = this.status === 'completed' ? `⏳ ~0s remaining` : `⏳ ${formatEta(this.etaSec)}`;
 
         if (this.status === 'uploading') {
           this.toggleBtn.textContent = 'Pause ⏸️';
           this.toggleBtn.className = 'btn-small btn-pause';
           this.toggleBtn.style.display = 'inline-block';
-          if (statusEl) statusEl.textContent = 'Uploading...';
         } else if (this.status === 'paused' || this.status === 'failed') {
           this.toggleBtn.textContent = 'Resume ▶️';
           this.toggleBtn.className = 'btn-small btn-resume';
           this.toggleBtn.style.display = 'inline-block';
-          if (statusEl) statusEl.textContent = this.status === 'failed' ? 'Failed (click Resume)' : 'Paused';
         } else if (this.status === 'completed') {
           this.toggleBtn.style.display = 'none';
-          if (statusEl) statusEl.textContent = 'Completed ✅';
         }
+
+        updateSessionSummaryUI();
       }
 
       async start() {
@@ -820,13 +1082,16 @@
 
         if (this.currentOffset >= this.totalBytes && this.status === 'uploading') {
           this.status = 'completed';
+          this.smoothedSpeed = 0;
+          this.etaSec = 0;
           this.updateUI();
           checkAuthAndFetchFiles();
           setTimeout(() => {
             if (this.card && this.card.parentNode) {
               this.card.parentNode.removeChild(this.card);
             }
-            checkHideProgressSection();
+            uploadTasks.delete(this.cardId);
+            updateSessionSummaryUI();
           }, 3000);
         }
       }
@@ -834,10 +1099,18 @@
       updateSpeed(bytesDone) {
         const now = Date.now();
         const duration = (now - this.lastTime) / 1000;
-        if (duration >= 0.5) {
+        if (duration >= 0.2) {
           const bytesDiff = bytesDone - this.lastBytes;
-          const speed = bytesDiff / duration;
-          this.speedStr = formatBytes(speed) + '/s';
+          const instantSpeed = bytesDiff / duration;
+          if (this.smoothedSpeed <= 0) {
+            this.smoothedSpeed = instantSpeed;
+          } else {
+            this.smoothedSpeed = (0.3 * instantSpeed) + (0.7 * this.smoothedSpeed);
+          }
+
+          const remaining = Math.max(0, this.totalBytes - bytesDone);
+          this.etaSec = this.smoothedSpeed > 0 ? remaining / this.smoothedSpeed : 0;
+
           this.lastTime = now;
           this.lastBytes = bytesDone;
         }
@@ -872,14 +1145,9 @@
           xhr.upload.onprogress = (e) => {
             if (e.lengthComputable) {
               const currentLoaded = offset + e.loaded;
-              const percent = Math.min(100, Math.round((currentLoaded / total) * 100));
-              const bar = this.card.querySelector(`#bar-${this.cardId}`);
-              const percentEl = this.card.querySelector(`#percent-${this.cardId}`);
-              const sizeEl = this.card.querySelector(`#meta-size-${this.cardId}`);
-              if (bar) bar.style.width = percent + '%';
-              if (percentEl) percentEl.textContent = percent + '%';
-              if (sizeEl) sizeEl.textContent = `${formatBytes(currentLoaded)} / ${formatBytes(total)}`;
+              this.currentOffset = currentLoaded;
               this.updateSpeed(currentLoaded);
+              this.updateUI();
             }
           };
 
@@ -916,6 +1184,7 @@
 
       pause() {
         this.status = 'paused';
+        this.smoothedSpeed = 0;
         if (this.currentXhr) {
           this.currentXhr.abort();
           this.currentXhr = null;
@@ -954,19 +1223,13 @@
           this.card.parentNode.removeChild(this.card);
         }
         uploadTasks.delete(this.cardId);
-        checkHideProgressSection();
-      }
-    }
-
-    function checkHideProgressSection() {
-      const container = document.getElementById('upload-cards-container');
-      if (!container || container.children.length === 0) {
-        document.getElementById('progress-section').style.display = 'none';
+        updateSessionSummaryUI();
       }
     }
 
     function uploadFiles(files) {
       if (!files || files.length === 0) return;
+      startSessionTimerIfNeeded();
       Array.from(files).forEach((file) => {
         const task = new UploadTask(file);
         uploadTasks.set(task.cardId, task);

@@ -5,6 +5,7 @@ import '../../core/server/embedded_server.dart';
 import '../../core/server/file_storage_service.dart';
 import '../../core/server/shared_file.dart';
 import '../../core/utils/permission_helper.dart';
+import '../../core/utils/transfer_metrics.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
@@ -38,6 +39,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _uiRefreshTimer;
   StreamSubscription<UploadProgress?>? _progressSubscription;
   UploadProgress? _activeProgress;
+  String? _celebrationMessage;
+  Timer? _celebrationTimer;
   final Set<String> _promptedRequests = {};
   final TextEditingController _textController = TextEditingController();
   StreamSubscription<String>? _textSubscription;
@@ -69,6 +72,19 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) {
         setState(() {
           _activeProgress = progress;
+          if (progress != null && progress.isCompleted) {
+            _celebrationTimer?.cancel();
+            _celebrationMessage =
+                "🎉 Completed ${progress.sessionTotalFiles} ${progress.sessionTotalFiles == 1 ? 'file' : 'files'} (${TransferMetrics.formatSize(progress.sessionTotalBytes)}) in ${TransferMetrics.formatDuration(progress.elapsedDuration)}";
+            _celebrationTimer = Timer(const Duration(seconds: 4), () {
+              if (mounted) {
+                setState(() {
+                  _celebrationMessage = null;
+                  _activeProgress = null;
+                });
+              }
+            });
+          }
         });
       }
     });
@@ -91,6 +107,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _celebrationTimer?.cancel();
     _nativeEventsSubscription?.cancel();
     _textSubscription?.cancel();
     _textController.dispose();
@@ -381,11 +398,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _formatFileSize(int bytes) {
-    if (bytes <= 0) return '0 B';
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+    return TransferMetrics.formatSize(bytes);
   }
 
   String? get _fullPairingUrl {
@@ -707,6 +720,224 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 24),
 
+            // Live SHAREit-style Transfer Dashboard & Celebration Banner
+            if (_celebrationMessage != null) ...[
+              Container(
+                margin: const EdgeInsets.only(bottom: 16),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E3A2B),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.greenAccent, width: 1.5),
+                  boxShadow: const [
+                    BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 4)),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.stars, color: Colors.greenAccent, size: 28),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        _celebrationMessage!,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+
+            if (_activeProgress != null && !_activeProgress!.isCompleted) ...[
+              Card(
+                elevation: 6,
+                margin: const EdgeInsets.only(bottom: 20),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                color: const Color(0xFF1E1E2E),
+                child: Container(
+                  padding: const EdgeInsets.all(16.0),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: const Color(0xFF8A2BE2), width: 1.5),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Top Session Summary Card
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2A2A3D),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  'Transferring (${_activeProgress!.sessionCompletedFiles} of ${_activeProgress!.sessionTotalFiles} files)',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white10,
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Text(
+                                    '⏱️ ${TransferMetrics.formatDuration(_activeProgress!.elapsedDuration)}',
+                                    style: const TextStyle(
+                                      color: Color(0xFF8A2BE2),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            LinearProgressIndicator(
+                              value: (_activeProgress!.sessionPercent / 100.0).clamp(0.0, 1.0),
+                              backgroundColor: Colors.white10,
+                              valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF8A2BE2)),
+                              minHeight: 8,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  '${TransferMetrics.formatSize(_activeProgress!.sessionTransferredBytes)} / ${TransferMetrics.formatSize(_activeProgress!.sessionTotalBytes)}',
+                                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                ),
+                                Text(
+                                  '⚡ ${_activeProgress!.sessionSpeedString}',
+                                  style: const TextStyle(
+                                    color: Color(0xFF8A2BE2),
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                                Text(
+                                  '⏳ ${_activeProgress!.sessionEtaString}',
+                                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      const Text(
+                        'Active File Transfer',
+                        style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+
+                      // Wide Individual Active Transfer Card
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2A2A3D),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                CircleAvatar(
+                                  radius: 16,
+                                  backgroundColor: Colors.white10,
+                                  child: _getCategoryIcon(_activeProgress!.category),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    TransferMetrics.middleTruncate(_activeProgress!.filename, maxLength: 26),
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF8A2BE2).withAlpha(100),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    '${_activeProgress!.percent.toStringAsFixed(0)}%',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            LinearProgressIndicator(
+                              value: (_activeProgress!.percent / 100.0).clamp(0.0, 1.0),
+                              backgroundColor: Colors.white10,
+                              valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF8A2BE2)),
+                              minHeight: 6,
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                            const SizedBox(height: 10),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  '${TransferMetrics.formatSize(_activeProgress!.currentBytes)} / ${TransferMetrics.formatSize(_activeProgress!.totalBytes)}',
+                                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+                                ),
+                                Text(
+                                  '⚡ ${_activeProgress!.speedString}',
+                                  style: const TextStyle(
+                                    color: Color(0xFF8A2BE2),
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                                Text(
+                                  '⏳ ${_activeProgress!.etaString}',
+                                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+
             // Bidirectional Text & Clipboard Sharing Card
             Card(
               elevation: 4,
@@ -924,41 +1155,6 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 24),
 
             // Received Files Section
-            if (_activeProgress != null && !_activeProgress!.isCompleted) ...[
-              Container(
-                margin: const EdgeInsets.only(bottom: 16),
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF2A2A3D),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: const Color(0xFF8A2BE2), width: 1.5),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Receiving: ${_activeProgress!.filename} — ${_activeProgress!.percent.toStringAsFixed(0)}%',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 10),
-                    LinearProgressIndicator(
-                      value: _activeProgress!.percent / 100.0,
-                      backgroundColor: Colors.white10,
-                      valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF8A2BE2)),
-                      minHeight: 8,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-
             const Text(
               'Received Files',
               style: TextStyle(

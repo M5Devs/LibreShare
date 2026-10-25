@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'package:path_provider/path_provider.dart';
 import 'package:mime/mime.dart';
+import '../utils/transfer_metrics.dart';
 import 'shared_file.dart';
 
 class MaxBytesExceededException implements Exception {
@@ -20,18 +21,54 @@ class OffsetMismatchException implements Exception {
 
 class UploadProgress {
   final String filename;
+  final String category;
   final int currentBytes;
   final int totalBytes;
   final double percent;
   final bool isCompleted;
+  final double bytesPerSecond;
+  final String speedString;
+  final String etaString;
+  final Duration elapsedDuration;
+
+  // Session summary metrics
+  final int sessionTotalFiles;
+  final int sessionCompletedFiles;
+  final double sessionPercent;
+  final int sessionTotalBytes;
+  final int sessionTransferredBytes;
+  final double sessionBytesPerSecond;
+  final String sessionSpeedString;
+  final String sessionEtaString;
 
   UploadProgress({
     required this.filename,
+    this.category = 'Documents',
     required this.currentBytes,
     required this.totalBytes,
     required this.percent,
     this.isCompleted = false,
-  });
+    this.bytesPerSecond = 0.0,
+    String? speedString,
+    String? etaString,
+    Duration? elapsedDuration,
+    this.sessionTotalFiles = 1,
+    this.sessionCompletedFiles = 0,
+    this.sessionPercent = 0.0,
+    this.sessionTotalBytes = 0,
+    this.sessionTransferredBytes = 0,
+    this.sessionBytesPerSecond = 0.0,
+    String? sessionSpeedString,
+    String? sessionEtaString,
+  })  : speedString = speedString ?? TransferMetrics.formatSpeed(bytesPerSecond),
+        etaString = etaString ??
+            TransferMetrics.formatEta(
+                TransferMetrics.calculateEta(totalBytes - currentBytes, bytesPerSecond)),
+        elapsedDuration = elapsedDuration ?? Duration.zero,
+        sessionSpeedString = sessionSpeedString ?? TransferMetrics.formatSpeed(sessionBytesPerSecond),
+        sessionEtaString = sessionEtaString ??
+            TransferMetrics.formatEta(TransferMetrics.calculateEta(
+                sessionTotalBytes - sessionTransferredBytes, sessionBytesPerSecond));
 }
 
 class ActiveUploadSession {
@@ -41,6 +78,11 @@ class ActiveUploadSession {
   final int totalBytes;
   final String category;
   final String partFilePath;
+  int currentBytes;
+  DateTime lastChunkTime;
+  int lastChunkBytes;
+  double smoothedSpeed;
+  bool isCompleted;
 
   ActiveUploadSession({
     required this.uploadId,
@@ -49,7 +91,12 @@ class ActiveUploadSession {
     required this.totalBytes,
     required this.category,
     required this.partFilePath,
-  });
+    this.currentBytes = 0,
+    DateTime? lastChunkTime,
+    this.lastChunkBytes = 0,
+    this.smoothedSpeed = 0.0,
+    this.isCompleted = false,
+  }) : lastChunkTime = lastChunkTime ?? DateTime.now();
 }
 
 class FileStorageService {
@@ -59,6 +106,9 @@ class FileStorageService {
   final List<SharedFile> _receivedFiles = [];
   final Set<String> _reservedFilenames = {};
   final Map<String, ActiveUploadSession> _activeUploads = {};
+  final List<ActiveUploadSession> _completedSessionsHistory = [];
+  DateTime? _sessionStartTime;
+
   final StreamController<UploadProgress?> _progressController =
       StreamController<UploadProgress?>.broadcast();
 
@@ -274,6 +324,12 @@ class FileStorageService {
           'Invalid file size. Size must be between 1 byte and $maxUploadBytes bytes.');
     }
 
+    final now = DateTime.now();
+    if (_activeUploads.isEmpty || _sessionStartTime == null) {
+      _sessionStartTime = now;
+      _completedSessionsHistory.clear();
+    }
+
     final safeName = sanitizeFilename(filename);
     final category = getCategoryForFilename(safeName);
     final storageDir = await getStorageDirectory(category);
@@ -288,6 +344,7 @@ class FileStorageService {
       totalBytes: totalBytes,
       category: category,
       partFilePath: partFilePath,
+      lastChunkTime: now,
     );
 
     _activeUploads[uploadId] = session;
@@ -323,6 +380,81 @@ class FileStorageService {
     return 0;
   }
 
+  UploadProgress _buildUploadProgress({
+    required ActiveUploadSession session,
+    required int currentBytes,
+    required bool isCompleted,
+  }) {
+    final now = DateTime.now();
+    _sessionStartTime ??= now;
+
+    final timeDelta = now.difference(session.lastChunkTime).inMilliseconds / 1000.0;
+    if (timeDelta >= 0.2) {
+      final bytesDelta = currentBytes - session.lastChunkBytes;
+      if (bytesDelta >= 0) {
+        final instantSpeed = bytesDelta / timeDelta;
+        session.smoothedSpeed = TransferMetrics.calculateEmaSpeed(instantSpeed, session.smoothedSpeed);
+      }
+      session.lastChunkTime = now;
+      session.lastChunkBytes = currentBytes;
+    }
+
+    session.currentBytes = currentBytes;
+    session.isCompleted = isCompleted;
+
+    final percent = session.totalBytes > 0
+        ? (currentBytes / session.totalBytes * 100.0).clamp(0.0, 100.0)
+        : 100.0;
+
+    final etaSec = TransferMetrics.calculateEta(session.totalBytes - currentBytes, session.smoothedSpeed);
+    final elapsed = now.difference(_sessionStartTime!);
+
+    // Calculate session totals across all active + recent completed tasks
+    final allSessions = [..._activeUploads.values, ..._completedSessionsHistory];
+    final sessionTotalFiles = allSessions.isNotEmpty ? allSessions.length : 1;
+    final sessionCompletedFiles = allSessions.where((s) => s.isCompleted).length;
+
+    int sessionTotalBytes = 0;
+    int sessionTransferredBytes = 0;
+    double sessionAggregateSpeed = 0.0;
+
+    for (final s in allSessions) {
+      sessionTotalBytes += s.totalBytes;
+      sessionTransferredBytes += s.currentBytes;
+      if (!s.isCompleted) {
+        sessionAggregateSpeed += s.smoothedSpeed;
+      }
+    }
+
+    final sessionPercent = sessionTotalBytes > 0
+        ? (sessionTransferredBytes / sessionTotalBytes * 100.0).clamp(0.0, 100.0)
+        : 100.0;
+
+    final sessionRemainingBytes = sessionTotalBytes - sessionTransferredBytes;
+    final sessionEtaSec = TransferMetrics.calculateEta(sessionRemainingBytes, sessionAggregateSpeed);
+
+    return UploadProgress(
+      filename: session.sanitizedFilename,
+      category: session.category,
+      currentBytes: currentBytes,
+      totalBytes: session.totalBytes,
+      percent: percent,
+      isCompleted: isCompleted,
+      bytesPerSecond: session.smoothedSpeed,
+      speedString: TransferMetrics.formatSpeed(session.smoothedSpeed),
+      etaString: TransferMetrics.formatEta(etaSec),
+      elapsedDuration: elapsed,
+      sessionTotalFiles: sessionTotalFiles,
+      sessionCompletedFiles: sessionCompletedFiles,
+      sessionPercent: sessionPercent,
+      sessionTotalBytes: sessionTotalBytes,
+      sessionTransferredBytes: sessionTransferredBytes,
+      sessionBytesPerSecond: sessionAggregateSpeed,
+      sessionSpeedString: TransferMetrics.formatSpeed(sessionAggregateSpeed),
+      sessionEtaString: TransferMetrics.formatEta(sessionEtaSec),
+    );
+  }
+
   Future<Map<String, dynamic>> appendChunk({
     required String uploadId,
     required Stream<List<int>> stream,
@@ -345,6 +477,16 @@ class FileStorageService {
       final category = getCategoryForFilename(safeName);
       storageDir = await getStorageDirectory(category);
       partFile = File('${storageDir.path}/$safeName.part');
+
+      session = ActiveUploadSession(
+        uploadId: uploadId,
+        originalFilename: safeName,
+        sanitizedFilename: safeName,
+        totalBytes: totalBytes,
+        category: category,
+        partFilePath: partFile.path,
+      );
+      _activeUploads[uploadId] = session;
     }
 
     if (!await partFile.exists()) {
@@ -377,7 +519,6 @@ class FileStorageService {
     }
 
     final currentBytes = await partFile.length();
-    final percent = totalBytes > 0 ? (currentBytes / totalBytes * 100).clamp(0.0, 100.0) : 100.0;
 
     if (currentBytes >= totalBytes) {
       final resolvedName = await _resolveUniqueFilename(storageDir, safeName);
@@ -406,28 +547,29 @@ class FileStorageService {
       _receivedFiles.removeWhere((f) => f.id == sharedFile.id);
       _receivedFiles.add(sharedFile);
 
-      _activeUploads.remove(uploadId);
-
-      _progressController.add(UploadProgress(
-        filename: safeName,
+      final progress = _buildUploadProgress(
+        session: session,
         currentBytes: totalBytes,
-        totalBytes: totalBytes,
-        percent: 100.0,
         isCompleted: true,
-      ));
+      );
+
+      _activeUploads.remove(uploadId);
+      _completedSessionsHistory.add(session);
+
+      _progressController.add(progress);
 
       return {
         'status': 'completed',
         'file': sharedFile.toJson(),
       };
     } else {
-      _progressController.add(UploadProgress(
-        filename: safeName,
+      final progress = _buildUploadProgress(
+        session: session,
         currentBytes: currentBytes,
-        totalBytes: totalBytes,
-        percent: percent,
         isCompleted: false,
-      ));
+      );
+
+      _progressController.add(progress);
 
       return {
         'status': 'in_progress',
@@ -478,6 +620,16 @@ class FileStorageService {
     final IOSink sink = partFile.openWrite();
     int size = 0;
 
+    final session = ActiveUploadSession(
+      uploadId: fileId,
+      originalFilename: filename,
+      sanitizedFilename: safeName,
+      totalBytes: limit,
+      category: category,
+      partFilePath: partFilePath,
+    );
+    _activeUploads[fileId] = session;
+
     try {
       final byteCountingStream = stream.map((chunk) {
         size += chunk.length;
@@ -516,13 +668,16 @@ class FileStorageService {
       _receivedFiles.removeWhere((f) => f.id == sharedFile.id);
       _receivedFiles.add(sharedFile);
 
-      _progressController.add(UploadProgress(
-        filename: safeName,
+      final progress = _buildUploadProgress(
+        session: session,
         currentBytes: size,
-        totalBytes: size,
-        percent: 100.0,
         isCompleted: true,
-      ));
+      );
+
+      _activeUploads.remove(fileId);
+      _completedSessionsHistory.add(session);
+
+      _progressController.add(progress);
 
       return sharedFile;
     } catch (e) {
@@ -534,6 +689,7 @@ class FileStorageService {
           await partFile.delete();
         } catch (_) {}
       }
+      _activeUploads.remove(fileId);
       _progressController.add(null);
       rethrow;
     }
@@ -570,6 +726,8 @@ class FileStorageService {
     _sharedFiles.clear();
     _receivedFiles.clear();
     _activeUploads.clear();
+    _completedSessionsHistory.clear();
+    _sessionStartTime = null;
     _reservedFilenames.clear();
     _progressController.add(null);
   }
