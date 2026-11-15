@@ -59,6 +59,20 @@ class MainActivity : FlutterActivity() {
             }
         }
 
+        MethodChannel(messenger, "com.m5dev.libreshare/apps").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "listInstalledApps" -> AppCatalogHandler.listInstalledApps(applicationContext, result)
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(messenger, "com.m5dev.libreshare/storage").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getStorageInfo" -> StorageInfoHandler.getStorageInfo(applicationContext, result)
+                else -> result.notImplemented()
+            }
+        }
+
         EventChannel(messenger, "com.m5dev.libreshare/events").setStreamHandler(
             object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
