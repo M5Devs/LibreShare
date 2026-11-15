@@ -10,7 +10,11 @@ import '../picker/media_catalog.dart';
 
 /// Storage overview plus the list of received files.
 class FilesScreen extends StatefulWidget {
-  const FilesScreen({super.key, this.libraryLoader, this.storageInfoLoader});
+  const FilesScreen({
+    super.key,
+    this.libraryLoader,
+    this.storageInfoLoader,
+  });
 
   /// Overridable for tests; defaults to real device scans.
   final Future<MediaLibrary> Function()? libraryLoader;
@@ -143,11 +147,18 @@ class _StorageBar extends StatelessWidget {
           const SizedBox(height: 10),
           Text(
             info == null
-                ? 'Storage details unavailable on this platform'
-                : '${TransferMetrics.formatSize(info.usedBytes)} used of '
-                    '${TransferMetrics.formatSize(info.totalBytes)}',
+                ? 'Storage details unavailable'
+                : '${TransferMetrics.formatSize(info.usedBytes)} used / '
+                    '${TransferMetrics.formatSize(info.totalBytes)} total',
             style: const TextStyle(color: AppColors.textSecondary, fontSize: 12.5),
           ),
+          if (info != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              '${TransferMetrics.formatSize(info.freeBytes)} free',
+              style: const TextStyle(color: AppColors.textMuted, fontSize: 11.5),
+            ),
+          ],
         ],
       ),
     );
@@ -164,7 +175,7 @@ class _CategoryGrid extends StatelessWidget {
     final tiles = [
       _CatTile('Videos', Icons.movie_rounded, library.videos.length, AppColors.primary),
       _CatTile('Photos', Icons.photo_rounded, library.photos.length, AppColors.accent),
-      _CatTile('Apps', Icons.android_rounded, library.documents.length, AppColors.success),
+      _CatTile('Apps', Icons.android_rounded, library.apks.length, AppColors.success),
       _CatTile('Audio', Icons.music_note_rounded, library.music.length, AppColors.warning),
       _CatTile('Docs', Icons.description_rounded, library.documents.length, const Color(0xFF60A5FA)),
     ];

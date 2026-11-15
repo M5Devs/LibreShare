@@ -48,6 +48,36 @@ void main() {
     expect(library.totalCount, 5);
   });
 
+  test('scan routes .apk files into the apps category, not documents', () async {
+    await writeFile('Download/Telegram.apk', bytes: 128);
+    await writeFile('Docs/report.pdf');
+
+    final library = await MediaCatalog(rootDirectories: [root.path]).scan();
+
+    expect(library.apks.single.name, 'Telegram.apk');
+    expect(library.apks.single.sizeBytes, 128);
+    expect(library.documents.map((e) => e.name), isNot(contains('Telegram.apk')));
+    expect(library.totalCount, 2);
+  });
+
+  test('scanApks finds stored APKs and sorts newest first', () async {
+    final older = await writeFile('Download/older.apk', bytes: 64);
+    final newer = await writeFile('Download/nested/newer.apk', bytes: 64);
+    await older.setLastModified(DateTime(2020, 1, 1));
+    await newer.setLastModified(DateTime(2024, 1, 1));
+
+    final apks = await MediaCatalog(rootDirectories: [root.path]).scanApks();
+
+    expect(apks.map((e) => e.name), ['newer.apk', 'older.apk']);
+  });
+
+  test('scanApks ignores non-apk files', () async {
+    await writeFile('Download/notes.txt');
+    await writeFile('Download/app.apk');
+    final apks = await MediaCatalog(rootDirectories: [root.path]).scanApks();
+    expect(apks.single.name, 'app.apk');
+  });
+
   test('scan records byte sizes', () async {
     await writeFile('Music/sized.wav', bytes: 512);
     final library = await MediaCatalog(rootDirectories: [root.path]).scan();

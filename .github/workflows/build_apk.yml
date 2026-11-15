@@ -14,11 +14,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
+      - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -31,11 +31,13 @@ jobs:
       - name: Run tests
         run: flutter test
 
-      - name: Build Android Release APK
-        run: flutter build apk --release
+      # Split-per-ABI keeps each APK near 16 MB instead of bundling every
+      # architecture into one ~52 MB universal build.
+      - name: Build Android Release APKs (per ABI)
+        run: flutter build apk --release --split-per-abi
 
-      - name: Upload APK Artifact
+      - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: LibreShare-Release-APK
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: LibreShare-Release-APKs
+          path: build/app/outputs/flutter-apk/app-*-release.apk

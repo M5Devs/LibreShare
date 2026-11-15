@@ -9,6 +9,7 @@ import '../core/server/embedded_server.dart';
 import '../core/server/file_storage_service.dart';
 import '../core/server/session_manager.dart';
 import '../core/server/shared_file.dart';
+import 'network_address.dart';
 
 /// How the local server is being reached by peers.
 enum NetworkMode { lan, hotspot }
@@ -198,15 +199,45 @@ class ShareController extends ChangeNotifier {
           hotspotPassword = info['password'];
           ip = info['ip'];
         }
+
+        // The native hotspot IP is authoritative, but a device that also has
+        // cellular up can hand back a carrier address. Reject anything that is
+        // not a private AP address and re-derive it from the interfaces.
+        if (ip == null || !NetworkAddress.isHotspotAddress(ip)) {
+          ip = await NetworkAddress.findHotspotAddress();
+        }
+
+        if (ip == null) {
+          // Don't leak a running hotspot that the user cannot reach.
+          try {
+            await HotspotManager.stopHotspot();
+          } catch (_) {}
+          hotspotSsid = null;
+          hotspotPassword = null;
+          status = ServerStatus.stopped;
+          lastError =
+              'Hotspot is active but no local hotspot address was found. '
+              'Turn off mobile data and try again.';
+          _notify();
+          return;
+        }
       }
 
       if (!server.isRunning) {
         await server.start();
       }
 
-      ip ??= await NetworkHelper.getLocalIpAddress();
+      var resolvedIp = ip ?? await NetworkHelper.getLocalIpAddress();
+
+      // In LAN mode the helper can still land on a cellular address when Wi-Fi
+      // is down. Prefer a private-AP address so the QR code stays reachable.
+      if (NetworkAddress.isCellularAddress(resolvedIp)) {
+        final better = await NetworkAddress.findHotspotAddress();
+        if (better != null) resolvedIp = better;
+      }
+
       final port = server.actualPort ?? NetworkHelper.defaultPort;
-      serverUrl = NetworkHelper.formatServerUrl(ip, port);
+      serverUrl = NetworkHelper.formatServerUrl(resolvedIp, port);
 
       status = ServerStatus.running;
       _startPolling();

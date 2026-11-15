@@ -47,6 +47,7 @@ class MediaCatalog {
     'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'rtf',
     'csv', 'zip', 'rar', '7z', 'tar', 'gz', 'json', 'xml',
   };
+  static const Set<String> apkExtensions = {'apk'};
 
   static List<String> defaultRootDirectories() {
     if (Platform.isAndroid) {
@@ -82,11 +83,12 @@ class MediaCatalog {
     final videos = <MediaItem>[];
     final music = <MediaItem>[];
     final documents = <MediaItem>[];
+    final apks = <MediaItem>[];
 
     for (final root in rootDirectories) {
       final dir = Directory(root);
       if (!await dir.exists()) continue;
-      await _walk(dir, 0, photos, videos, music, documents);
+      await _walk(dir, 0, photos, videos, music, documents, apks);
     }
 
     int byNewest(MediaItem a, MediaItem b) {
@@ -99,13 +101,69 @@ class MediaCatalog {
     videos.sort(byNewest);
     music.sort(byNewest);
     documents.sort(byNewest);
+    apks.sort(byNewest);
 
     return MediaLibrary(
       photos: photos,
       videos: videos,
       music: music,
       documents: documents,
+      apks: apks,
     );
+  }
+
+  /// Scans the configured roots for `.apk` files that can be re-shared.
+  ///
+  /// These are APKs sitting in storage (downloads, Telegram, backups), as
+  /// opposed to the apps currently installed on the device.
+  Future<List<MediaItem>> scanApks() async {
+    final apks = <MediaItem>[];
+    for (final root in rootDirectories) {
+      final dir = Directory(root);
+      if (!await dir.exists()) continue;
+      await _walkApks(dir, 0, apks);
+    }
+    apks.sort((a, b) {
+      final at = a.modifiedAt?.millisecondsSinceEpoch ?? 0;
+      final bt = b.modifiedAt?.millisecondsSinceEpoch ?? 0;
+      return bt.compareTo(at);
+    });
+    return apks;
+  }
+
+  Future<void> _walkApks(Directory dir, int depth, List<MediaItem> out) async {
+    if (depth > _maxDepth || out.length >= _maxItemsPerCategory) return;
+
+    List<FileSystemEntity> entities;
+    try {
+      entities = await dir.list(followLinks: false).toList();
+    } catch (_) {
+      return;
+    }
+
+    for (final entity in entities) {
+      if (out.length >= _maxItemsPerCategory) return;
+      if (entity is Directory) {
+        await _walkApks(entity, depth + 1, out);
+        continue;
+      }
+      if (entity is! File) continue;
+
+      final name = entity.path.split(Platform.pathSeparator).last;
+      if (!apkExtensions.contains(extensionOf(name))) continue;
+
+      try {
+        final stat = await entity.stat();
+        out.add(MediaItem(
+          path: entity.path,
+          name: name,
+          sizeBytes: stat.size,
+          modifiedAt: stat.modified,
+        ));
+      } catch (_) {
+        continue;
+      }
+    }
   }
 
   Future<void> _walk(
@@ -115,6 +173,7 @@ class MediaCatalog {
     List<MediaItem> videos,
     List<MediaItem> music,
     List<MediaItem> documents,
+    List<MediaItem> apks,
   ) async {
     if (depth > _maxDepth) return;
 
@@ -127,7 +186,7 @@ class MediaCatalog {
 
     for (final entity in entities) {
       if (entity is Directory) {
-        await _walk(entity, depth + 1, photos, videos, music, documents);
+        await _walk(entity, depth + 1, photos, videos, music, documents, apks);
         continue;
       }
       if (entity is! File) continue;
@@ -153,7 +212,9 @@ class MediaCatalog {
         modifiedAt: modified,
       );
 
-      if (photoExtensions.contains(ext)) {
+      if (apkExtensions.contains(ext)) {
+        if (apks.length < _maxItemsPerCategory) apks.add(item);
+      } else if (photoExtensions.contains(ext)) {
         if (photos.length < _maxItemsPerCategory) photos.add(item);
       } else if (videoExtensions.contains(ext)) {
         if (videos.length < _maxItemsPerCategory) videos.add(item);
@@ -173,6 +234,7 @@ class MediaLibrary {
     required this.videos,
     required this.music,
     required this.documents,
+    this.apks = const [],
   });
 
   final List<MediaItem> photos;
@@ -180,13 +242,17 @@ class MediaLibrary {
   final List<MediaItem> music;
   final List<MediaItem> documents;
 
+  /// `.apk` files found in storage (not installed packages).
+  final List<MediaItem> apks;
+
   static const empty = MediaLibrary(
     photos: [],
     videos: [],
     music: [],
     documents: [],
+    apks: [],
   );
 
   int get totalCount =>
-      photos.length + videos.length + music.length + documents.length;
+      photos.length + videos.length + music.length + documents.length + apks.length;
 }

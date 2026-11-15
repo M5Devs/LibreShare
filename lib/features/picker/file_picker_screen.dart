@@ -40,11 +40,19 @@ class PickableItem {
 }
 
 class FilePickerScreen extends StatefulWidget {
-  const FilePickerScreen({super.key, this.libraryLoader, this.appLoader});
+  const FilePickerScreen({
+    super.key,
+    this.libraryLoader,
+    this.appLoader,
+    this.apkLoader,
+  });
 
   /// Overridable for tests; defaults to a real device scan.
   final Future<MediaLibrary> Function()? libraryLoader;
   final Future<List<InstalledAppInfo>> Function()? appLoader;
+
+  /// Scans storage for `.apk` files (the "Stored APKs" filter).
+  final Future<List<MediaItem>> Function()? apkLoader;
 
   @override
   State<FilePickerScreen> createState() => _FilePickerScreenState();
@@ -55,11 +63,13 @@ class _FilePickerScreenState extends State<FilePickerScreen>
   late final TabController _tabs;
   late final Future<MediaLibrary> Function() _libraryLoader;
   late final Future<List<InstalledAppInfo>> Function() _appLoader;
+  late final Future<List<MediaItem>> Function() _apkLoader;
 
   MediaLibrary _library = MediaLibrary.empty;
   List<InstalledAppInfo> _apps = const [];
+  List<MediaItem> _storedApks = const [];
   bool _loading = true;
-  bool _appsOnly = false;
+  bool _storedApksOnly = false;
 
   final Set<String> _selectedPaths = {};
   final Map<String, PickableItem> _selectedItems = {};
@@ -69,6 +79,7 @@ class _FilePickerScreenState extends State<FilePickerScreen>
     super.initState();
     _libraryLoader = widget.libraryLoader ?? (() => MediaCatalog().scan());
     _appLoader = widget.appLoader ?? AppCatalogBridge.listInstalledApps;
+    _apkLoader = widget.apkLoader ?? (() => MediaCatalog().scanApks());
     _tabs = TabController(length: 5, vsync: this);
     _tabs.addListener(() {
       if (mounted) setState(() {});
@@ -86,11 +97,13 @@ class _FilePickerScreenState extends State<FilePickerScreen>
     final results = await Future.wait([
       _libraryLoader(),
       _appLoader(),
+      _apkLoader(),
     ]);
     if (!mounted) return;
     setState(() {
       _library = results[0] as MediaLibrary;
       _apps = results[1] as List<InstalledAppInfo>;
+      _storedApks = results[2] as List<MediaItem>;
       _loading = false;
     });
   }
@@ -150,8 +163,9 @@ class _FilePickerScreenState extends State<FilePickerScreen>
                     children: [
                       _AppsTab(
                         apps: _apps,
-                        appsOnly: _appsOnly,
-                        onFilterChanged: (v) => setState(() => _appsOnly = v),
+                        storedApks: _storedApks,
+                        storedApksOnly: _storedApksOnly,
+                        onFilterChanged: (v) => setState(() => _storedApksOnly = v),
                         selectedPaths: _selectedPaths,
                         onToggle: _toggle,
                       ),
@@ -230,21 +244,23 @@ class _FilePickerScreenState extends State<FilePickerScreen>
 class _AppsTab extends StatelessWidget {
   const _AppsTab({
     required this.apps,
-    required this.appsOnly,
+    required this.storedApks,
+    required this.storedApksOnly,
     required this.onFilterChanged,
     required this.selectedPaths,
     required this.onToggle,
   });
 
   final List<InstalledAppInfo> apps;
-  final bool appsOnly;
+  final List<MediaItem> storedApks;
+  final bool storedApksOnly;
   final ValueChanged<bool> onFilterChanged;
   final Set<String> selectedPaths;
   final void Function(PickableItem) onToggle;
 
   @override
   Widget build(BuildContext context) {
-    final items = apps
+    final installed = apps
         .map((a) => PickableItem(
               name: '${a.label}.apk',
               path: a.apkPath,
@@ -255,16 +271,28 @@ class _AppsTab extends StatelessWidget {
             ))
         .toList();
 
+    final stored = storedApks
+        .map((m) => PickableItem(
+              name: m.name,
+              path: m.path,
+              sizeBytes: m.sizeBytes,
+              category: 'Apps',
+              subtitle: 'Stored APK',
+            ))
+        .toList();
+
+    final items = storedApksOnly ? stored : installed;
+
     return Column(
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
           child: SegmentedButton<bool>(
-            segments: const [
-              ButtonSegment(value: false, label: Text('Installed')),
-              ButtonSegment(value: true, label: Text('Stored APKs')),
+            segments: [
+              ButtonSegment(value: false, label: Text('Installed (${installed.length})')),
+              ButtonSegment(value: true, label: Text('Stored APKs (${stored.length})')),
             ],
-            selected: {appsOnly},
+            selected: {storedApksOnly},
             onSelectionChanged: (s) => onFilterChanged(s.first),
             style: ButtonStyle(
               backgroundColor: WidgetStateProperty.resolveWith(
@@ -277,10 +305,16 @@ class _AppsTab extends StatelessWidget {
         ),
         Expanded(
           child: items.isEmpty
-              ? const EmptyState(
-                  icon: Icons.android_rounded,
-                  title: 'No apps found',
-                  subtitle: 'App extraction needs the Android app-listing helper.',
+              ? EmptyState(
+                  icon: storedApksOnly
+                      ? Icons.folder_off_rounded
+                      : Icons.android_rounded,
+                  title: storedApksOnly
+                      ? 'No stored APKs found'
+                      : 'No apps found',
+                  subtitle: storedApksOnly
+                      ? 'Downloaded .apk files on this device appear here.'
+                      : 'Installed apps will appear here once the app catalog loads.',
                 )
               : ListView.separated(
                   padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),

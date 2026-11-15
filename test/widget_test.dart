@@ -36,6 +36,8 @@ Future<MediaLibrary> emptyLibrary() async => MediaLibrary.empty;
 
 Future<List<InstalledAppInfo>> noApps() async => const [];
 
+Future<List<MediaItem>> noApks() async => const [];
+
 Future<StorageInfo?> noStorage() async => null;
 
 Widget wrap(ShareController controller, Widget child, {bool routes = false}) {
@@ -125,7 +127,11 @@ void main() {
     final controller = buildController();
     await tester.pumpWidget(wrap(
       controller,
-      FilePickerScreen(libraryLoader: emptyLibrary, appLoader: noApps),
+      FilePickerScreen(
+        libraryLoader: emptyLibrary,
+        appLoader: noApps,
+        apkLoader: noApks,
+      ),
     ));
     await tester.pumpAndSettle();
 
@@ -136,6 +142,75 @@ void main() {
     expect(find.text('Files 📄'), findsOneWidget);
     expect(find.text('Select files to send'), findsOneWidget);
     expect(find.text('Next / Send'), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('Apps tab renders real installed apps with icons and sizes', (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController();
+    final apps = [
+      const InstalledAppInfo(
+        label: 'Signal',
+        packageName: 'org.thoughtcrime.securesms',
+        apkPath: '/data/app/signal/base.apk',
+        sizeBytes: 42 * 1024 * 1024,
+      ),
+      const InstalledAppInfo(
+        label: 'VLC',
+        packageName: 'org.videolan.vlc',
+        apkPath: '/data/app/vlc/base.apk',
+        sizeBytes: 31 * 1024 * 1024,
+      ),
+    ];
+
+    await tester.pumpWidget(wrap(
+      controller,
+      FilePickerScreen(
+        libraryLoader: emptyLibrary,
+        appLoader: () async => apps,
+        apkLoader: noApks,
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    // Real labels, not an empty-state placeholder.
+    expect(find.text('Signal.apk'), findsOneWidget);
+    expect(find.text('VLC.apk'), findsOneWidget);
+    expect(find.textContaining('Installed (2)'), findsOneWidget);
+    expect(find.text('No apps found'), findsNothing);
+
+    controller.dispose();
+  });
+
+  testWidgets('Apps tab switches to real stored APKs', (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController();
+    final stored = [
+      const MediaItem(
+        path: '/storage/emulated/0/Download/telegram.apk',
+        name: 'telegram.apk',
+        sizeBytes: 5 * 1024 * 1024,
+      ),
+    ];
+
+    await tester.pumpWidget(wrap(
+      controller,
+      FilePickerScreen(
+        libraryLoader: emptyLibrary,
+        appLoader: noApps,
+        apkLoader: () async => stored,
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Stored APKs (1)'), findsOneWidget);
+
+    await tester.tap(find.textContaining('Stored APKs'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('telegram.apk'), findsOneWidget);
+    expect(find.text('No stored APKs found'), findsNothing);
 
     controller.dispose();
   });
@@ -193,6 +268,61 @@ void main() {
     expect(find.text('Device Storage'), findsOneWidget);
     expect(find.text('Categories'), findsOneWidget);
     expect(find.text('No files received yet'), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('Files screen renders real storage numbers', (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController();
+    // 95.5 GB used of 108 GB total.
+    const total = 108 * 1024 * 1024 * 1024;
+    const used = 102 * 1024 * 1024 * 1024;
+
+    await tester.pumpWidget(wrap(
+      controller,
+      FilesScreen(
+        libraryLoader: emptyLibrary,
+        storageInfoLoader: () async => const StorageInfo(
+          totalBytes: total,
+          freeBytes: total - used,
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('used /'), findsOneWidget);
+    expect(find.textContaining('total'), findsOneWidget);
+    expect(find.text('Storage details unavailable'), findsNothing);
+
+    controller.dispose();
+  });
+
+  testWidgets('Files screen counts stored APKs in the Apps tile', (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController();
+    const library = MediaLibrary(
+      photos: [],
+      videos: [],
+      music: [],
+      documents: [],
+      apks: [
+        MediaItem(path: '/a.apk', name: 'a.apk', sizeBytes: 10),
+        MediaItem(path: '/b.apk', name: 'b.apk', sizeBytes: 10),
+      ],
+    );
+
+    await tester.pumpWidget(wrap(
+      controller,
+      FilesScreen(
+        libraryLoader: () async => library,
+        storageInfoLoader: noStorage,
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Apps'), findsOneWidget);
+    expect(find.text('2 files'), findsOneWidget);
 
     controller.dispose();
   });
