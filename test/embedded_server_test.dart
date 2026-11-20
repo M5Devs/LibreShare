@@ -399,4 +399,28 @@ void main() {
     final bytes = await response.fold<List<int>>([], (previous, element) => previous..addAll(element));
     expect(bytes.length, greaterThan(0));
   });
+
+  test('GET /api/ping exposes the host name without a session', () async {
+    // A fresh server carries an explicit name, so the browser can label the
+    // connection pill without guessing from the OS.
+    final named = EmbeddedServer(
+      port: 0,
+      hostName: 'Pixel 7 Pro',
+      storageService: FileStorageService(storageDirectoryOverride: tempDir),
+    );
+    await named.start();
+    try {
+      final port = named.actualPort!;
+      final request = await httpClient.get('127.0.0.1', port, '/api/ping');
+      final response = await request.close();
+      expect(response.statusCode, 200);
+
+      final body = await response.transform(utf8.decoder).join();
+      final json = jsonDecode(body) as Map<String, dynamic>;
+      expect(json['status'], 'alive');
+      expect(json['host'], 'Pixel 7 Pro');
+    } finally {
+      await named.stop();
+    }
+  });
 }

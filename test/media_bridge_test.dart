@@ -135,4 +135,114 @@ void main() {
     final library = await MediaCatalog(mediaBridge: () async => null).scan();
     expect(library.totalCount, 0);
   });
+
+  test('countMedia reads the per-category counts from the channel', () async {
+    messenger.setMockMethodCallHandler(MediaBridge.channel, (call) async {
+      if (call.method != 'countMedia') return null;
+      return <String, Object?>{'photos': 12, 'videos': 3, 'music': 7, 'documents': 5};
+    });
+
+    final counts = await MediaBridge.countMedia();
+
+    expect(counts, isNotNull);
+    expect(counts!.photos, 12);
+    expect(counts.videos, 3);
+    expect(counts.music, 7);
+    expect(counts.documents, 5);
+    expect(counts.total, 27);
+  });
+
+  test('countMedia parses string counts, which is what the channel sends',
+      () async {
+    messenger.setMockMethodCallHandler(MediaBridge.channel, (call) async {
+      if (call.method != 'countMedia') return null;
+      return <String, Object?>{'photos': '4', 'videos': '0', 'music': '9', 'documents': '1'};
+    });
+
+    final counts = await MediaBridge.countMedia();
+    expect(counts!.photos, 4);
+    expect(counts.music, 9);
+  });
+
+  test('countMedia returns null when the platform store is unavailable',
+      () async {
+    MediaBridge.usesPlatformStoreOverride = false;
+    expect(await MediaBridge.countMedia(), isNull);
+  });
+
+  test('thumbnail memoises bytes so a rebuild does not re-decode', () async {
+    MediaBridge.clearThumbnailCache();
+    var calls = 0;
+    messenger.setMockMethodCallHandler(MediaBridge.channel, (call) async {
+      if (call.method != 'thumbnail') return null;
+      calls++;
+      return Uint8List.fromList(<int>[1, 2, 3]);
+    });
+
+    final first = await MediaBridge.thumbnail('content://media/external/images/media/9');
+    final second = await MediaBridge.thumbnail('content://media/external/images/media/9');
+
+    expect(first, isNotNull);
+    expect(second, isNotNull);
+    // One native decode, one cache hit.
+    expect(calls, 1);
+  });
+
+  test('thumbnail passes the uri the native handler expects', () async {
+    MediaBridge.clearThumbnailCache();
+    String? seenUri;
+    messenger.setMockMethodCallHandler(MediaBridge.channel, (call) async {
+      if (call.method != 'thumbnail') return null;
+      seenUri = (call.arguments as Map)['uri'] as String?;
+      return Uint8List.fromList(<int>[9]);
+    });
+
+    await MediaBridge.thumbnail('content://media/external/video/media/42');
+    expect(seenUri, 'content://media/external/video/media/42');
+  });
+
+  test('a thumbnail failure is null, not an exception', () async {
+    MediaBridge.clearThumbnailCache();
+    messenger.setMockMethodCallHandler(MediaBridge.channel, (call) async {
+      throw PlatformException(code: 'DECODE_FAILED');
+    });
+
+    expect(await MediaBridge.thumbnail('content://media/external/images/media/3'), isNull);
+  });
+
+  test('MediaCatalog counts prefers the native count query', () async {
+    var listed = false;
+    messenger.setMockMethodCallHandler(MediaBridge.channel, (call) async {
+      if (call.method == 'countMedia') {
+        return <String, Object?>{'photos': 100, 'videos': 20, 'music': 5, 'documents': 8};
+      }
+      if (call.method == 'listMedia') {
+        listed = true;
+        return <String, Object?>{'photos': [], 'videos': [], 'music': [], 'documents': []};
+      }
+      return null;
+    });
+
+    final counts = await MediaCatalog().counts();
+
+    expect(counts.photos, 100);
+    expect(counts.documents, 8);
+    // The whole point: counting never materialises the rows.
+    expect(listed, isFalse);
+  });
+
+  test('a scanned media row carries its content uri for thumbnails', () async {
+    final library = await MediaCatalog(
+      mediaBridge: () async => MediaPayload.fromMap({
+        'photos': [
+          row(name: 'pic.jpg', path: '/dcim/pic.jpg', uri: 'content://media/external/images/media/77'),
+        ],
+        'videos': const [],
+        'music': const [],
+        'documents': const [],
+      }),
+    ).scan();
+
+    expect(library.photos.single.contentUri, 'content://media/external/images/media/77');
+  });
 }

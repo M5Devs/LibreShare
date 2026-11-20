@@ -70,7 +70,7 @@ class ConnectKaiosScreen extends StatelessWidget {
                 label: 'Hotspot password',
                 value: controller.hotspotPassword!,
                 icon: Icons.key_rounded,
-                secret: true,
+                monospace: true,
               ),
             const SizedBox(height: 16),
             const StepHeader(

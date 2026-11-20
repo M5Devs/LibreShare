@@ -1,14 +1,13 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/platform/native_bridge.dart';
-import '../../core/server/shared_file.dart';
 import '../../core/utils/transfer_metrics.dart';
 import '../../state/share_controller.dart';
 import '../../state/share_scope.dart';
 import '../../theme/app_theme.dart';
 import '../common/ui_kit.dart';
+import '../picker/file_picker_screen.dart';
 
 /// WhatsApp-style in-room screen: chat bubbles plus live transfer cards.
 class TransferSessionScreen extends StatefulWidget {
@@ -68,10 +67,20 @@ class _TransferSessionScreenState extends State<TransferSessionScreen> {
 
   Future<void> _attachFiles() async {
     final controller = ShareScope.of(context);
-    final picked = await FilePickerBridge.pick();
-    if (picked.isEmpty) return;
-    controller.shareFiles(picked);
-    _scrollToEnd();
+    // The in-app picker, not the system file chooser: the system dialog sends
+    // the user through Google Files and back, which is exactly the detour this
+    // screen exists to avoid.
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => FilePickerScreen(
+          onConfirm: (files) {
+            if (files.isEmpty) return;
+            controller.shareFiles(files);
+            _scrollToEnd();
+          },
+        ),
+      ),
+    );
   }
 
   @override
@@ -697,29 +706,4 @@ String _timeLabel(DateTime time) {
   final h = time.hour.toString().padLeft(2, '0');
   final m = time.minute.toString().padLeft(2, '0');
   return '$h:$m';
-}
-
-/// Thin wrapper so the session screen can pick more files mid-session.
-class FilePickerBridge {
-  FilePickerBridge._();
-
-  static Future<List<SharedFile>> pick() async {
-    try {
-      final picked = await FilePicker.pickFiles();
-      final out = <SharedFile>[];
-      for (final f in picked) {
-        final path = f.path;
-        if (path == null || path.isEmpty) continue;
-        out.add(SharedFile.fromPath(
-          filePath: path,
-          customName: f.name,
-          customSize: f.lengthSync(),
-          ownedByApp: false,
-        ));
-      }
-      return out;
-    } catch (_) {
-      return const [];
-    }
-  }
 }

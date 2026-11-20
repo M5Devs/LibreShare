@@ -10,12 +10,17 @@ class MediaItem {
     required this.name,
     required this.sizeBytes,
     this.modifiedAt,
+    this.contentUri,
   });
 
   final String path;
   final String name;
   final int sizeBytes;
   final DateTime? modifiedAt;
+
+  /// `content://` handle used to decode a real thumbnail on Android. Null on
+  /// desktop, where the picker falls back to an extension icon.
+  final String? contentUri;
 
   String get sizeLabel => TransferMetrics.formatSize(sizeBytes);
 }
@@ -148,6 +153,7 @@ class MediaCatalog {
           name: row.name,
           sizeBytes: row.sizeBytes,
           modifiedAt: row.modifiedAt,
+          contentUri: row.uri.startsWith('content://') ? row.uri : null,
         );
 
     // The platform already sorted newest-first; keep that order.
@@ -161,6 +167,32 @@ class MediaCatalog {
           .map(toItem)
           .toList(),
     );
+  }
+
+  /// Per-category counts for the storage screen.
+  ///
+  /// Prefers the native `COUNT(*)` query, which never materialises a row. When
+  /// that is unavailable (desktop, or the channel failed) it falls back to
+  /// counting a full scan.
+  Future<MediaCounts> counts() async {
+    final native = await _countFromPlatform();
+    if (native != null) return native;
+    final library = await scan();
+    return MediaCounts(
+      photos: library.photos.length,
+      videos: library.videos.length,
+      music: library.music.length,
+      documents: library.documents.length,
+    );
+  }
+
+  Future<MediaCounts?> _countFromPlatform() async {
+    if (_mediaBridge == null) return null;
+    try {
+      return await MediaBridge.countMedia();
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Scans the configured roots for `.apk` files that can be re-shared.

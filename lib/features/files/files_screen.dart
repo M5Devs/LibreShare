@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/platform/media_bridge.dart';
 import '../../core/platform/storage_bridge.dart';
 import '../../core/server/shared_file.dart';
 import '../../core/utils/transfer_metrics.dart';
@@ -13,11 +14,16 @@ class FilesScreen extends StatefulWidget {
   const FilesScreen({
     super.key,
     this.libraryLoader,
+    this.countsLoader,
     this.storageInfoLoader,
   });
 
   /// Overridable for tests; defaults to real device scans.
   final Future<MediaLibrary> Function()? libraryLoader;
+
+  /// Cheap per-category counts. Defaults to the native `COUNT(*)` query, which
+  /// avoids materialising every row just to print a number.
+  final Future<MediaCounts> Function()? countsLoader;
   final Future<StorageInfo?> Function()? storageInfoLoader;
 
   @override
@@ -27,6 +33,7 @@ class FilesScreen extends StatefulWidget {
 class _FilesScreenState extends State<FilesScreen> {
   StorageInfo? _storage;
   MediaLibrary _library = MediaLibrary.empty;
+  MediaCounts? _counts;
   bool _loading = true;
 
   @override
@@ -36,20 +43,42 @@ class _FilesScreenState extends State<FilesScreen> {
   }
 
   Future<void> _load() async {
-    final libraryLoader = widget.libraryLoader ?? (() => MediaCatalog().scan());
     final storageLoader = widget.storageInfoLoader ?? StorageBridge.getStorageInfo;
 
-    // A failing media scan must not blank out the storage figures, so the two
-    // sources are settled independently and each falls back on its own.
+    // Storage, counts and the APK list are independent, so they settle together
+    // and each one fails on its own without blanking the others.
     final storage = await _guard(storageLoader, null);
-    final library = await _guard(libraryLoader, MediaLibrary.empty);
+    final counts = await _guard(_loadCounts, null);
+    final library = await _guard(_loadLibrary, MediaLibrary.empty);
 
     if (!mounted) return;
     setState(() {
       _storage = storage;
+      _counts = counts;
       _library = library;
       _loading = false;
     });
+  }
+
+  Future<MediaCounts?> _loadCounts() async {
+    final loader = widget.countsLoader;
+    if (loader != null) return loader();
+    // A caller that supplies its own library already knows the counts.
+    if (widget.libraryLoader != null) return null;
+    return MediaCatalog().counts();
+  }
+
+  Future<MediaLibrary> _loadLibrary() async {
+    final loader = widget.libraryLoader;
+    if (loader != null) return loader();
+    // Only the Apps tile needs a file list; the other tiles read the counts.
+    return MediaLibrary(
+      photos: const [],
+      videos: const [],
+      music: const [],
+      documents: const [],
+      apks: await MediaCatalog().scanApks(),
+    );
   }
 
   static Future<T> _guard<T>(Future<T> Function() load, T fallback) async {
@@ -85,7 +114,7 @@ class _FilesScreenState extends State<FilesScreen> {
                 const SizedBox(height: 18),
                 const SectionHeader(title: 'Categories'),
                 const SizedBox(height: 12),
-                _CategoryGrid(library: _library),
+                _CategoryGrid(library: _library, counts: _counts),
                 const SizedBox(height: 22),
                 SectionHeader(
                   title: 'Received Files',
@@ -186,18 +215,22 @@ class _StorageBar extends StatelessWidget {
 }
 
 class _CategoryGrid extends StatelessWidget {
-  const _CategoryGrid({required this.library});
+  const _CategoryGrid({required this.library, this.counts});
 
   final MediaLibrary library;
 
+  /// Native row counts when available; falls back to the scanned list lengths.
+  final MediaCounts? counts;
+
   @override
   Widget build(BuildContext context) {
+    final counts = this.counts;
     final tiles = [
-      _CatTile('Videos', Icons.movie_rounded, library.videos.length, AppColors.primary),
-      _CatTile('Photos', Icons.photo_rounded, library.photos.length, AppColors.accent),
+      _CatTile('Videos', Icons.movie_rounded, counts?.videos ?? library.videos.length, AppColors.primary),
+      _CatTile('Photos', Icons.photo_rounded, counts?.photos ?? library.photos.length, AppColors.accent),
       _CatTile('Apps', Icons.android_rounded, library.apks.length, AppColors.success),
-      _CatTile('Audio', Icons.music_note_rounded, library.music.length, AppColors.warning),
-      _CatTile('Docs', Icons.description_rounded, library.documents.length, const Color(0xFF60A5FA)),
+      _CatTile('Audio', Icons.music_note_rounded, counts?.music ?? library.music.length, AppColors.warning),
+      _CatTile('Docs', Icons.description_rounded, counts?.documents ?? library.documents.length, const Color(0xFF60A5FA)),
     ];
 
     return GridView.count(

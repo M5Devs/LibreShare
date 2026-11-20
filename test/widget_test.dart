@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:libreshare/app_routes.dart';
 import 'package:libreshare/core/network/peer_connector.dart';
 import 'package:libreshare/core/platform/app_catalog_bridge.dart';
+import 'package:libreshare/core/platform/media_bridge.dart';
 import 'package:libreshare/core/platform/storage_bridge.dart';
 import 'package:libreshare/core/server/embedded_server.dart';
 import 'package:libreshare/core/server/file_storage_service.dart';
@@ -420,6 +421,34 @@ void main() {
     expect(find.text('95.5 GB used / 108.0 GB total'), findsOneWidget);
     expect(find.text('12.5 GB free'), findsOneWidget);
     expect(find.text('Storage details unavailable'), findsNothing);
+
+    controller.dispose();
+  });
+
+  testWidgets('Files screen shows the native media counts', (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController();
+
+    await tester.pumpWidget(wrap(
+      controller,
+      FilesScreen(
+        libraryLoader: emptyLibrary,
+        storageInfoLoader: noStorage,
+        // The cheap COUNT(*) reply, without materialising a single row.
+        countsLoader: () async => const MediaCounts(
+          photos: 2431,
+          videos: 118,
+          music: 402,
+          documents: 37,
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('2431 files'), findsOneWidget);
+    expect(find.text('118 files'), findsOneWidget);
+    expect(find.text('402 files'), findsOneWidget);
+    expect(find.text('37 files'), findsOneWidget);
 
     controller.dispose();
   });
@@ -854,6 +883,44 @@ void main() {
     expect(find.text('Enter the 6-digit PIN'), findsOneWidget);
     // Every value on this screen exists to be copied elsewhere.
     expect(find.byIcon(Icons.copy_rounded), findsNWidgets(3));
+
+    controller.dispose();
+  });
+
+  testWidgets('The hotspot password is readable, never masked', (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController();
+    controller.serverUrl = 'http://192.168.43.1:5000';
+    controller.hotspotSsid = 'LibreShare-7f3a';
+    controller.hotspotPassword = 'k4m9qz2p';
+
+    await tester.pumpWidget(
+      wrap(controller, ConnectPcScreen(controllerOverride: controller)),
+    );
+    await tester.pumpAndSettle();
+
+    // The whole point of this screen is retyping these values on another
+    // device, so the password must be legible.
+    expect(find.text('k4m9qz2p'), findsOneWidget);
+    expect(find.text('LibreShare-7f3a'), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('KaiOS screen shows the hotspot password in the clear',
+      (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController();
+    controller.serverUrl = 'http://192.168.43.1:5000';
+    controller.hotspotSsid = 'LibreShare-7f3a';
+    controller.hotspotPassword = 'k4m9qz2p';
+
+    await tester.pumpWidget(
+      wrap(controller, ConnectKaiosScreen(controllerOverride: controller)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('k4m9qz2p'), findsOneWidget);
 
     controller.dispose();
   });

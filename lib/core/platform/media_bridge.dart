@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 /// One row returned by the native MediaStore query.
@@ -119,4 +120,77 @@ class MediaBridge {
       return null;
     }
   }
+
+  /// Per-category row counts. Much cheaper than listing: the platform counts
+  /// rows in SQL instead of materialising every file.
+  static Future<MediaCounts?> countMedia() async {
+    if (!usesPlatformStore) return null;
+    try {
+      final raw = await channel.invokeMethod<Map>('countMedia');
+      if (raw == null) return null;
+      return MediaCounts.fromMap(Map<dynamic, dynamic>.from(raw));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Decodes one thumbnail. Results are memoised because grid cells rebuild on
+  /// every scroll and a native decode per rebuild makes the picker stutter.
+  static Future<Uint8List?> thumbnail(String uri) async {
+    final cached = _thumbCache[uri];
+    if (cached != null) return cached;
+    if (!usesPlatformStore) return null;
+
+    try {
+      final bytes = await channel.invokeMethod<Uint8List>(
+        'thumbnail',
+        <String, Object?>{'uri': uri},
+      );
+      if (bytes == null) return null;
+      _remember(uri, bytes);
+      return bytes;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static const int _thumbCacheLimit = 240;
+  static final Map<String, Uint8List> _thumbCache = <String, Uint8List>{};
+
+  static void _remember(String uri, Uint8List bytes) {
+    if (_thumbCache.length >= _thumbCacheLimit) {
+      _thumbCache.remove(_thumbCache.keys.first);
+    }
+    _thumbCache[uri] = bytes;
+  }
+
+  /// Drops memoised thumbnails; used by tests and after a media rescan.
+  @visibleForTesting
+  static void clearThumbnailCache() => _thumbCache.clear();
+}
+
+/// Per-category counts from the platform media store.
+class MediaCounts {
+  const MediaCounts({
+    this.photos = 0,
+    this.videos = 0,
+    this.music = 0,
+    this.documents = 0,
+  });
+
+  final int photos;
+  final int videos;
+  final int music;
+  final int documents;
+
+  int get total => photos + videos + music + documents;
+
+  static int _int(Object? raw) => int.tryParse(raw?.toString() ?? '') ?? 0;
+
+  static MediaCounts fromMap(Map<dynamic, dynamic> map) => MediaCounts(
+        photos: _int(map['photos']),
+        videos: _int(map['videos']),
+        music: _int(map['music']),
+        documents: _int(map['documents']),
+      );
 }

@@ -24,10 +24,27 @@ class EmbeddedServer {
   EmbeddedServer({
     this.port = 5000,
     this.htmlContentOverride,
+    this.hostName,
     FileStorageService? storageService,
     SessionManager? sessionManager,
   })  : storageService = storageService ?? FileStorageService(),
         sessionManager = sessionManager ?? SessionManager();
+
+  /// Name shown to the browser in the connection pill. Null means "use this
+  /// machine's hostname", resolved lazily so tests never touch the OS.
+  final String? hostName;
+
+  String get _resolvedHostName {
+    final named = hostName;
+    if (named != null && named.isNotEmpty) return named;
+    try {
+      final host = Platform.localHostname;
+      if (host.isNotEmpty) return host;
+    } catch (_) {
+      // Some sandboxes deny the lookup; a generic label is still useful.
+    }
+    return 'LibreShare Host';
+  }
 
   bool get isRunning => _server != null;
   int? get actualPort => _server?.port;
@@ -230,6 +247,7 @@ class EmbeddedServer {
       final payload = jsonEncode({
         'status': 'alive',
         'app': 'LibreShare',
+        'host': _resolvedHostName,
       });
       return Response.ok(
         payload,

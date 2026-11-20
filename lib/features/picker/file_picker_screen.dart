@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../app_routes.dart';
 import '../../core/platform/app_catalog_bridge.dart';
+import '../../core/platform/media_bridge.dart';
 import '../../core/server/shared_file.dart';
 import '../../core/utils/permission_helper.dart';
 import '../../core/utils/transfer_metrics.dart';
@@ -23,6 +24,7 @@ class PickableItem {
     required this.category,
     this.subtitle,
     this.iconBytes,
+    this.contentUri,
   });
 
   final String name;
@@ -31,6 +33,9 @@ class PickableItem {
   final String category;
   final String? subtitle;
   final List<int>? iconBytes;
+
+  /// `content://` handle for a native thumbnail; null on desktop.
+  final String? contentUri;
 
   SharedFile toSharedFile() => SharedFile.fromPath(
         filePath: path,
@@ -46,7 +51,13 @@ class FilePickerScreen extends StatefulWidget {
     this.libraryLoader,
     this.appLoader,
     this.apkLoader,
+    this.onConfirm,
   });
+
+  /// When supplied, the picker hands the selection back instead of routing to
+  /// the receive screen. The transfer room uses this to attach files mid
+  /// session without leaving the room.
+  final void Function(List<SharedFile> files)? onConfirm;
 
   /// Overridable for tests; defaults to a real device scan.
   final Future<MediaLibrary> Function()? libraryLoader;
@@ -142,14 +153,19 @@ class _FilePickerScreenState extends State<FilePickerScreen>
       _selectedItems.values.fold(0, (sum, item) => sum + item.sizeBytes);
 
   void _proceed() {
+    final files = _selectedItems.values.map((e) => e.toSharedFile()).toList();
+
+    final onConfirm = widget.onConfirm;
+    if (onConfirm != null) {
+      Navigator.of(context).pop();
+      onConfirm(files);
+      return;
+    }
+
     final controller = ShareScope.of(context);
     // Sending nothing is a valid choice: the user may only want the room to
     // receive files or chat, which is how SHAREit behaves.
-    if (_selectedItems.isNotEmpty) {
-      controller.shareFiles(
-        _selectedItems.values.map((e) => e.toSharedFile()).toList(),
-      );
-    }
+    if (files.isNotEmpty) controller.shareFiles(files);
     Navigator.of(context).pushNamed(AppRoutes.receive);
   }
 
@@ -257,6 +273,7 @@ class _FilePickerScreenState extends State<FilePickerScreen>
             path: m.path,
             sizeBytes: m.sizeBytes,
             category: 'Images',
+            contentUri: m.contentUri,
           ))
       .toList();
 
@@ -266,6 +283,7 @@ class _FilePickerScreenState extends State<FilePickerScreen>
             path: m.path,
             sizeBytes: m.sizeBytes,
             category: 'Videos',
+            contentUri: m.contentUri,
           ))
       .toList();
 
@@ -462,7 +480,11 @@ class _MediaGridTab extends StatelessWidget {
                     children: [
                       ClipRRect(
                         borderRadius: const BorderRadius.vertical(top: Radius.circular(13)),
-                        child: _Thumbnail(path: item.path, category: item.category),
+                        child: _Thumbnail(
+                          path: item.path,
+                          category: item.category,
+                          contentUri: item.contentUri,
+                        ),
                       ),
                       Positioned(
                         top: 6,
@@ -505,25 +527,27 @@ class _MediaGridTab extends StatelessWidget {
 }
 
 class _Thumbnail extends StatelessWidget {
-  const _Thumbnail({required this.path, required this.category});
+  const _Thumbnail({
+    required this.path,
+    required this.category,
+    this.contentUri,
+  });
 
   final String path;
   final String category;
+  final String? contentUri;
+
+  bool get _isVisual => category == 'Images' || category == 'Videos';
 
   @override
   Widget build(BuildContext context) {
-    if (category == 'Images') {
-      return Image.file(
-        File(path),
-        fit: BoxFit.cover,
-        gaplessPlayback: true,
-        errorBuilder: (_, _, _) => const _ThumbFallback(),
-      );
-    }
+    final image = _buildImage();
+    if (category != 'Videos') return image;
+
     return Stack(
       fit: StackFit.expand,
       children: [
-        const _ThumbFallback(),
+        image,
         Center(
           child: Icon(
             Icons.play_circle_fill_rounded,
@@ -532,6 +556,76 @@ class _Thumbnail extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildImage() {
+    // The platform thumbnail is authoritative on Android: `content://` media
+    // is not readable through dart:io under scoped storage.
+    if (_isVisual && contentUri != null) {
+      return _NativeThumbnail(uri: contentUri!, fallbackPath: path);
+    }
+    if (category == 'Images') {
+      return Image.file(
+        File(path),
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        errorBuilder: (_, _, _) => const _ThumbFallback(),
+      );
+    }
+    return const _ThumbFallback();
+  }
+}
+
+/// Decodes a thumbnail through the platform channel, once per URI.
+///
+/// The bytes are memoised in [MediaBridge], so a rebuild during scroll does not
+/// trigger another native decode.
+class _NativeThumbnail extends StatefulWidget {
+  const _NativeThumbnail({required this.uri, required this.fallbackPath});
+
+  final String uri;
+  final String fallbackPath;
+
+  @override
+  State<_NativeThumbnail> createState() => _NativeThumbnailState();
+}
+
+class _NativeThumbnailState extends State<_NativeThumbnail> {
+  late Future<Uint8List?> _bytes = MediaBridge.thumbnail(widget.uri);
+
+  @override
+  void didUpdateWidget(_NativeThumbnail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.uri != widget.uri) {
+      _bytes = MediaBridge.thumbnail(widget.uri);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Uint8List?>(
+      future: _bytes,
+      builder: (context, snapshot) {
+        final bytes = snapshot.data;
+        if (bytes != null) {
+          return Image.memory(
+            bytes,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            errorBuilder: (_, _, _) => const _ThumbFallback(),
+          );
+        }
+        if (snapshot.connectionState == ConnectionState.done) {
+          return Image.file(
+            File(widget.fallbackPath),
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            errorBuilder: (_, _, _) => const _ThumbFallback(),
+          );
+        }
+        return const _ThumbFallback();
+      },
     );
   }
 }

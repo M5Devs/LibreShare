@@ -77,6 +77,12 @@ class MainActivity : FlutterActivity() {
         MethodChannel(messenger, "com.m5dev.libreshare/media").setMethodCallHandler { call, result ->
             when (call.method) {
                 "listMedia" -> MediaStoreHandler.listMedia(applicationContext, result)
+                "countMedia" -> MediaStoreHandler.countMedia(applicationContext, result)
+                "thumbnail" -> MediaStoreHandler.loadThumbnail(
+                    applicationContext,
+                    call.argument<String>("uri"),
+                    result,
+                )
                 else -> result.notImplemented()
             }
         }

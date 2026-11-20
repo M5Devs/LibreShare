@@ -15,7 +15,6 @@ class CopyField extends StatelessWidget {
     required this.value,
     this.icon,
     this.monospace = false,
-    this.secret = false,
     this.onCopy,
   });
 
@@ -23,13 +22,10 @@ class CopyField extends StatelessWidget {
   final String value;
   final IconData? icon;
   final bool monospace;
-  final bool secret;
   final VoidCallback? onCopy;
 
   @override
   Widget build(BuildContext context) {
-    final shown = secret ? '•' * value.length.clamp(0, 16) : value;
-
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
@@ -59,7 +55,7 @@ class CopyField extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 SelectableText(
-                  shown,
+                  value,
                   maxLines: 2,
                   style: TextStyle(
                     color: AppColors.textPrimary,
