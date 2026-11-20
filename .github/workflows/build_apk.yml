@@ -23,7 +23,13 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: 'stable'
+          # Pinned, not a floating `channel: stable`. CI picked up 3.50.1 while
+          # the project is developed on 3.41.2, and 3.50 deprecated
+          # `package:flutter/material.dart` in favour of `package:material_ui`.
+          # That turned 16 info-level lints in otherwise-correct code into a
+          # build failure. Bump this deliberately, with a local
+          # `flutter analyze` + `flutter test` run to match.
+          flutter-version: '3.41.2'
 
       - name: Install dependencies
         run: flutter pub get
