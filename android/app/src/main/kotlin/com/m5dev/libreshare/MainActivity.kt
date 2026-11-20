@@ -59,7 +59,7 @@ class MainActivity : FlutterActivity() {
             }
         }
 
-        MethodChannel(messenger, "com.m5dev.libreshare/apps").setMethodCallHandler { call, result ->
+        MethodChannel(messenger, "com.m5dev.libreshare/catalog").setMethodCallHandler { call, result ->
             when (call.method) {
                 "listInstalledApps" -> AppCatalogHandler.listInstalledApps(applicationContext, result)
                 else -> result.notImplemented()
@@ -68,7 +68,13 @@ class MainActivity : FlutterActivity() {
 
         MethodChannel(messenger, "com.m5dev.libreshare/storage").setMethodCallHandler { call, result ->
             when (call.method) {
-                "getStorageInfo" -> StorageInfoHandler.getStorageInfo(applicationContext, result)
+                "getStorageInfo" -> {
+                    try {
+                        StorageInfoHandler.getStorageInfo(applicationContext, result)
+                    } catch (e: Exception) {
+                        result.error("STORAGE_FAILED", e.message, null)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }

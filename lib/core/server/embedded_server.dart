@@ -623,7 +623,10 @@ class EmbeddedServer {
             return innerHandler(request);
           }
 
-          if (path == 'api/auth/pin' ||
+          // Unauthenticated by design: a peer must be able to prove this
+          // device is a LibreShare host *before* it has a session cookie.
+          if (path == 'api/ping' ||
+              path == 'api/auth/pin' ||
               path == 'api/auth/request-approval' ||
               path == 'api/auth/poll-approval') {
             return innerHandler(request);

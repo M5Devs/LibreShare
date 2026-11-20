@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../../app_routes.dart';
 import '../../state/share_controller.dart';
@@ -7,8 +6,52 @@ import '../../state/share_scope.dart';
 import '../../theme/app_theme.dart';
 import '../common/ui_kit.dart';
 
-class HomeScreen extends StatelessWidget {
+/// Home hub: the logo bar plus the three hero actions.
+///
+/// The screen owns exactly one behaviour beyond navigation — watching the
+/// controller for a newly linked device and handing off to the transfer room.
+/// Text and link sharing live in the room's chat bar, not here.
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  ShareController? _controller;
+  int _seenEpoch = 0;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final controller = ShareScope.of(context);
+    if (_controller == controller) return;
+
+    _controller?.removeListener(_onControllerChanged);
+    _controller = controller;
+    _seenEpoch = controller.connectionEpoch;
+    controller.addListener(_onControllerChanged);
+  }
+
+  @override
+  void dispose() {
+    _controller?.removeListener(_onControllerChanged);
+    super.dispose();
+  }
+
+  void _onControllerChanged() {
+    final controller = _controller;
+    if (controller == null || !mounted) return;
+    if (controller.connectionEpoch == _seenEpoch) return;
+
+    _seenEpoch = controller.connectionEpoch;
+    if (!controller.peerConnected) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) AppRoutes.openSession(context);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -24,27 +67,25 @@ class HomeScreen extends StatelessWidget {
           _OverflowMenu(controller: controller),
           const SizedBox(width: 6),
         ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(38),
+          child: _StatusStrip(controller: controller),
+        ),
       ),
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(18, 6, 18, 28),
-          children: [
-            _NetworkBadge(controller: controller),
-            const SizedBox(height: 22),
-            const _HeroRow(),
-            const SizedBox(height: 24),
-            _QuickShareCard(controller: controller),
-            const SizedBox(height: 20),
-            _ActivityCard(controller: controller),
-          ],
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
+            child: const _HeroRow(),
+          ),
         ),
       ),
     );
   }
 }
 
-class _NetworkBadge extends StatelessWidget {
-  const _NetworkBadge({required this.controller});
+class _StatusStrip extends StatelessWidget {
+  const _StatusStrip({required this.controller});
 
   final ShareController controller;
 
@@ -57,21 +98,34 @@ class _NetworkBadge extends StatelessWidget {
         ? (hotspot ? AppColors.accent : AppColors.success)
         : AppColors.textMuted;
 
-    return Row(
-      children: [
-        StatusPill(
-          label: label,
-          icon: hotspot ? Icons.wifi_tethering_rounded : Icons.wifi_rounded,
-          color: color,
-        ),
-        const SizedBox(width: 8),
-        if (running && controller.peerConnected)
-          const StatusPill(
-            label: 'Device linked',
-            icon: Icons.link_rounded,
-            color: AppColors.primary,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 0, 18, 10),
+      child: Row(
+        children: [
+          StatusPill(
+            label: label,
+            icon: hotspot ? Icons.wifi_tethering_rounded : Icons.wifi_rounded,
+            color: color,
           ),
-      ],
+          const SizedBox(width: 8),
+          // Deliberately not gated on `running`: joining a peer by QR links the
+          // device without this phone ever starting its own server.
+          if (controller.peerConnected)
+            const StatusPill(
+              label: 'Device linked',
+              icon: Icons.link_rounded,
+              color: AppColors.primary,
+            ),
+          if (controller.isConnecting) ...[
+            const SizedBox(width: 8),
+            const StatusPill(
+              label: 'Connecting…',
+              icon: Icons.sync_rounded,
+              color: AppColors.warning,
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -107,144 +161,6 @@ class _HeroRow extends StatelessWidget {
           onTap: () => Navigator.of(context).pushNamed(AppRoutes.files),
         ),
       ],
-    );
-  }
-}
-
-class _QuickShareCard extends StatefulWidget {
-  const _QuickShareCard({required this.controller});
-
-  final ShareController controller;
-
-  @override
-  State<_QuickShareCard> createState() => _QuickShareCardState();
-}
-
-class _QuickShareCardState extends State<_QuickShareCard> {
-  final _textController = TextEditingController();
-
-  @override
-  void dispose() {
-    _textController.dispose();
-    super.dispose();
-  }
-
-  void _send() {
-    final text = _textController.text.trim();
-    if (text.isEmpty) return;
-    widget.controller.sendText(text);
-    _textController.clear();
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Text broadcast to connected devices')),
-    );
-  }
-
-  Future<void> _paste() async {
-    final data = await Clipboard.getData(Clipboard.kTextPlain);
-    final text = data?.text;
-    if (text != null) {
-      _textController.text = text;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SurfaceCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            children: [
-              Icon(Icons.bolt_rounded, color: AppColors.primary, size: 20),
-              SizedBox(width: 8),
-              Text(
-                'Quick Text / URL',
-                style: TextStyle(
-                  color: AppColors.textPrimary,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 15,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _textController,
-            minLines: 1,
-            maxLines: 3,
-            style: const TextStyle(color: AppColors.textPrimary),
-            decoration: const InputDecoration(
-              hintText: 'Paste a link or type a message…',
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _paste,
-                  icon: const Icon(Icons.content_paste_rounded, size: 18),
-                  label: const Text('Paste'),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: _send,
-                  icon: const Icon(Icons.send_rounded, size: 18),
-                  label: const Text('Send'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ActivityCard extends StatelessWidget {
-  const _ActivityCard({required this.controller});
-
-  final ShareController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final recent = controller.transfers.reversed.take(3).toList();
-
-    return SurfaceCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SectionHeader(title: 'Recent Activity'),
-          const SizedBox(height: 12),
-          if (recent.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 10),
-              child: Text(
-                'No transfers yet. Tap Send or Receive to get started.',
-                style: TextStyle(color: AppColors.textMuted, fontSize: 13),
-              ),
-            )
-          else
-            for (final item in recent)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: Row(
-                  children: [
-                    CategoryAvatar(category: item.category, size: 38),
-                    const SizedBox(width: 12),
-                    Expanded(child: TruncatedName(name: item.fileName, maxLength: 24)),
-                    const SizedBox(width: 8),
-                    Text(
-                      item.incoming ? 'Received' : 'Shared',
-                      style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
-                    ),
-                  ],
-                ),
-              ),
-        ],
-      ),
     );
   }
 }

@@ -9,52 +9,53 @@ import java.io.File
 /**
  * Reports total / free / used bytes for the primary storage volume.
  *
- * [Environment.getDataDirectory] (/data) is the authoritative internal volume
- * but is unreadable on a few locked-down builds, so this falls back to the
- * app's own files directory and then to external storage before giving up.
+ * [Environment.getDataDirectory] (/data) is the authoritative internal volume.
+ * StatFs only needs the path to exist, not to be readable, so /data works even
+ * on locked-down builds; the fallbacks exist for the rare device where the path
+ * is missing entirely. The channel reply is synchronous because StatFs is a
+ * cheap syscall, but every failure still answers with an error instead of
+ * leaving Dart waiting forever.
  */
 object StorageInfoHandler {
 
     fun getStorageInfo(context: Context, result: MethodChannel.Result) {
-        val candidate: File? = pickVolume(context)
-        if (candidate == null) {
-            result.error("STORAGE_FAILED", "No readable storage volume", null)
-            return
-        }
-
-        try {
-            val stat = StatFs(candidate.path)
-            val total = stat.blockCountLong * stat.blockSizeLong
-            val free = stat.availableBlocksLong * stat.blockSizeLong
-            result.success(
-                mapOf(
-                    "total" to total.toString(),
-                    "free" to free.toString(),
-                    "used" to (total - free).coerceAtLeast(0L).toString(),
-                    "path" to candidate.path,
-                )
-            )
-        } catch (e: Exception) {
-            result.error("STORAGE_FAILED", e.message, null)
-        }
-    }
-
-    private fun pickVolume(context: Context): File? {
-        val candidates = listOf(
+        val candidates = listOfNotNull(
             Environment.getDataDirectory(),
             context.filesDir,
             context.getExternalFilesDir(null),
             Environment.getExternalStorageDirectory(),
         )
+
+        var lastError: String? = null
         for (dir in candidates) {
-            if (dir == null) continue
-            try {
-                val stat = StatFs(dir.path)
-                if (stat.blockCountLong > 0L && stat.blockSizeLong > 0L) return dir
-            } catch (_: Exception) {
-                // Try the next volume.
+            val info = readVolume(dir)
+            if (info != null) {
+                result.success(info)
+                return
             }
+            lastError = "StatFs returned no blocks for ${dir.path}"
         }
-        return null
+
+        result.error("STORAGE_FAILED", lastError ?: "No readable storage volume", null)
+    }
+
+    private fun readVolume(dir: File): Map<String, String>? = try {
+        if (!dir.exists()) return null
+        val stat = StatFs(dir.path)
+        val blockSize = stat.blockSizeLong
+        val total = stat.blockCountLong * blockSize
+        val free = stat.availableBlocksLong * blockSize
+        if (total <= 0L || blockSize <= 0L) {
+            null
+        } else {
+            mapOf(
+                "total" to total.toString(),
+                "free" to free.toString(),
+                "used" to (total - free).coerceAtLeast(0L).toString(),
+                "path" to dir.path,
+            )
+        }
+    } catch (_: Exception) {
+        null
     }
 }

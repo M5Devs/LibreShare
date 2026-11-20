@@ -38,17 +38,26 @@ class _FilesScreenState extends State<FilesScreen> {
   Future<void> _load() async {
     final libraryLoader = widget.libraryLoader ?? (() => MediaCatalog().scan());
     final storageLoader = widget.storageInfoLoader ?? StorageBridge.getStorageInfo;
-    final results = await Future.wait([
-      storageLoader(),
-      libraryLoader(),
-    ]);
+
+    // A failing media scan must not blank out the storage figures, so the two
+    // sources are settled independently and each falls back on its own.
+    final storage = await _guard(storageLoader, null);
+    final library = await _guard(libraryLoader, MediaLibrary.empty);
 
     if (!mounted) return;
     setState(() {
-      _storage = results[0] as StorageInfo?;
-      _library = results[1] as MediaLibrary;
+      _storage = storage;
+      _library = library;
       _loading = false;
     });
+  }
+
+  static Future<T> _guard<T>(Future<T> Function() load, T fallback) async {
+    try {
+      return await load();
+    } catch (_) {
+      return fallback;
+    }
   }
 
   @override
@@ -120,18 +129,29 @@ class _StorageBar extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.storage_rounded, color: AppColors.accent, size: 20),
-              SizedBox(width: 8),
-              Text(
-                'Device Storage',
-                style: TextStyle(
-                  color: AppColors.textPrimary,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 15,
+              const Icon(Icons.storage_rounded, color: AppColors.accent, size: 20),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Device Storage',
+                  style: TextStyle(
+                    color: AppColors.textPrimary,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                  ),
                 ),
               ),
+              if (info != null)
+                Text(
+                  '${(fraction * 100).round()}%',
+                  style: const TextStyle(
+                    color: AppColors.accent,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: 14),
@@ -148,14 +168,14 @@ class _StorageBar extends StatelessWidget {
           Text(
             info == null
                 ? 'Storage details unavailable'
-                : '${TransferMetrics.formatSize(info.usedBytes)} used / '
-                    '${TransferMetrics.formatSize(info.totalBytes)} total',
+                : '${TransferMetrics.formatSizeShort(info.usedBytes)} used / '
+                    '${TransferMetrics.formatSizeShort(info.totalBytes)} total',
             style: const TextStyle(color: AppColors.textSecondary, fontSize: 12.5),
           ),
           if (info != null) ...[
             const SizedBox(height: 4),
             Text(
-              '${TransferMetrics.formatSize(info.freeBytes)} free',
+              '${TransferMetrics.formatSizeShort(info.freeBytes)} free',
               style: const TextStyle(color: AppColors.textMuted, fontSize: 11.5),
             ),
           ],

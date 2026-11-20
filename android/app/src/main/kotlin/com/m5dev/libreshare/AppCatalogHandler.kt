@@ -8,9 +8,12 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.os.Handler
+import android.os.Looper
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.concurrent.Executors
 
 /**
  * Enumerates the apps installed on the device so the picker can offer their
@@ -22,20 +25,29 @@ import java.io.File
  * so the list contains things the user can actually send.
  *
  * Icons and APK sizes are read here because both are expensive and must not run
- * on the UI thread; the whole enumeration happens on a worker thread.
+ * on the UI thread; the whole enumeration happens on a worker thread. The
+ * MethodChannel reply is marshalled back to the main thread, which the channel
+ * requires.
  */
 object AppCatalogHandler {
 
     private const val ICON_PX = 96
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val worker = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "libreshare-app-catalog").apply { isDaemon = true }
+    }
+
     fun listInstalledApps(context: Context, result: MethodChannel.Result) {
-        Thread {
+        val appContext = context.applicationContext
+        worker.execute {
             try {
-                result.success(collect(context))
-            } catch (e: Exception) {
-                result.error("APP_LIST_FAILED", e.message, null)
+                val apps = collect(appContext)
+                mainHandler.post { result.success(apps) }
+            } catch (e: Throwable) {
+                mainHandler.post { result.error("APP_LIST_FAILED", e.message, null) }
             }
-        }.start()
+        }
     }
 
     private fun collect(context: Context): List<Map<String, Any?>> {
@@ -48,14 +60,18 @@ object AppCatalogHandler {
             if (!isShareable(pm, appInfo)) continue
 
             val sourceDir = appInfo.sourceDir ?: continue
-            val label = pm.getApplicationLabel(appInfo).toString()
+            val label = try {
+                pm.getApplicationLabel(appInfo).toString()
+            } catch (_: Exception) {
+                appInfo.packageName
+            }
 
             apps.add(
                 mapOf(
                     "label" to label,
                     "packageName" to appInfo.packageName,
                     "apkPath" to sourceDir,
-                    "size" to apkSize(sourceDir).toString(),
+                    "size" to apkSize(appInfo).toString(),
                     "icon" to iconBytes(pm, appInfo),
                     "system" to appInfo.isSystemApp(),
                 )
@@ -81,10 +97,21 @@ object AppCatalogHandler {
         (flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
             (flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
 
-    private fun apkSize(sourceDir: String): Long = try {
-        File(sourceDir).length()
-    } catch (_: Exception) {
-        0L
+    /**
+     * Total on-disk size of an app: the base APK plus every split APK in its
+     * source directory. Modern apps ship most of their code as splits, so the
+     * base file alone would report a fraction of the real size.
+     */
+    private fun apkSize(appInfo: ApplicationInfo): Long {
+        val sourceDir = appInfo.sourceDir ?: return 0L
+        val base = File(sourceDir)
+        val splits = appInfo.splitSourceDirs
+        var total = if (base.isFile) base.length() else 0L
+        splits?.forEach { path ->
+            val split = File(path)
+            if (split.isFile) total += split.length()
+        }
+        return total
     }
 
     private fun iconBytes(pm: PackageManager, appInfo: ApplicationInfo): ByteArray? = try {
@@ -104,7 +131,7 @@ object AppCatalogHandler {
                     val canvas = Canvas(bmp)
                     drawable.setBounds(0, 0, canvas.width, canvas.height)
                     drawable.draw(canvas)
-                }
+                }.let { Bitmap.createScaledBitmap(it, ICON_PX, ICON_PX, true) }
             }
         }
 

@@ -94,18 +94,27 @@ class _FilePickerScreenState extends State<FilePickerScreen>
   }
 
   Future<void> _load() async {
-    final results = await Future.wait([
-      _libraryLoader(),
-      _appLoader(),
-      _apkLoader(),
-    ]);
+    // Each source is settled independently: an unreadable media library must
+    // not empty the Apps tab, and vice versa.
+    final library = await _guard(_libraryLoader, MediaLibrary.empty);
+    final apps = await _guard(_appLoader, const <InstalledAppInfo>[]);
+    final apks = await _guard(_apkLoader, const <MediaItem>[]);
+
     if (!mounted) return;
     setState(() {
-      _library = results[0] as MediaLibrary;
-      _apps = results[1] as List<InstalledAppInfo>;
-      _storedApks = results[2] as List<MediaItem>;
+      _library = library;
+      _apps = apps;
+      _storedApks = apks;
       _loading = false;
     });
+  }
+
+  static Future<T> _guard<T>(Future<T> Function() load, T fallback) async {
+    try {
+      return await load();
+    } catch (_) {
+      return fallback;
+    }
   }
 
   void _toggle(PickableItem item) {

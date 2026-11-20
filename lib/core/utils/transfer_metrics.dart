@@ -20,6 +20,25 @@ class TransferMetrics {
     }
   }
 
+  /// One-decimal variant for headline figures ("95.5 GB", "512.0 MB").
+  ///
+  /// Device capacity is only meaningful to a couple of significant figures, so
+  /// a single decimal keeps the two numbers in the storage line the same width.
+  static String formatSizeShort(num bytes) {
+    if (bytes <= 0 || bytes.isNaN || bytes.isInfinite) return '0 B';
+    if (bytes < 1024) return '${bytes.toInt()} B';
+
+    const k = 1024.0;
+    const units = ['KB', 'MB', 'GB', 'TB', 'PB'];
+    var value = bytes / k;
+    var unit = 0;
+    while (value >= k && unit < units.length - 1) {
+      value /= k;
+      unit++;
+    }
+    return '${value.toStringAsFixed(1)} ${units[unit]}';
+  }
+
   /// Formats speed cleanly (e.g., "0 B/s", "450.0 KB/s", "14.2 MB/s").
   static String formatSpeed(double bytesPerSecond) {
     if (bytesPerSecond <= 0 || bytesPerSecond.isNaN || bytesPerSecond.isInfinite) {

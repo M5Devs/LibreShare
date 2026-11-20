@@ -11,6 +11,7 @@ import '../../state/share_controller.dart';
 import '../../state/share_scope.dart';
 import '../../theme/app_theme.dart';
 import '../common/ui_kit.dart';
+import 'qr_scanner_sheet.dart';
 
 /// Radar / receive screen: boots the server, shows the pairing QR + PIN and
 /// hands off to the session screen once a peer connects.
@@ -127,20 +128,27 @@ class _ReceiveScreenState extends State<ReceiveScreen>
 
     if (allowed == true) {
       controller.approve(request.id);
+      if (mounted) await AppRoutes.openSession(context);
     } else {
       controller.reject(request.id);
     }
   }
 
-  void _openScanner() {
-    showModalBottomSheet<void>(
+  Future<void> _openScanner() async {
+    final controller = _controller ?? ShareScope.of(context);
+    final connected = await showModalBottomSheet<bool>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: AppColors.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (_) => const _ScannerSheet(),
+      builder: (_) => QrScannerSheet(onPayload: controller.connectToPeer),
     );
+
+    if (connected != true || !mounted) return;
+    // A scanned peer is an explicit join, so hand off immediately.
+    await AppRoutes.openSession(context);
   }
 
   @override
@@ -472,114 +480,4 @@ class _RadarPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _RadarPainter oldDelegate) =>
       oldDelegate.progress != progress;
-}
-
-class _ScannerSheet extends StatefulWidget {
-  const _ScannerSheet();
-
-  @override
-  State<_ScannerSheet> createState() => _ScannerSheetState();
-}
-
-class _ScannerSheetState extends State<_ScannerSheet> {
-  final _addressController = TextEditingController();
-  bool _checking = true;
-  bool _cameraGranted = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _check();
-  }
-
-  @override
-  void dispose() {
-    _addressController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _check() async {
-    bool granted;
-    try {
-      granted = await PermissionHelper.requestCameraPermissions(context);
-    } catch (_) {
-      granted = false;
-    }
-    if (!mounted) return;
-    setState(() {
-      _cameraGranted = granted;
-      _checking = false;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(22, 22, 22, 30),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text(
-            'Scan Sender QR',
-            style: TextStyle(
-              color: AppColors.textPrimary,
-              fontSize: 17,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 16),
-          Container(
-            height: 200,
-            decoration: BoxDecoration(
-              color: Colors.black,
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: AppColors.border),
-            ),
-            alignment: Alignment.center,
-            child: _checking
-                ? const CircularProgressIndicator()
-                : Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.qr_code_scanner_rounded,
-                        size: 54,
-                        color: AppColors.textSecondary,
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        _cameraGranted
-                            ? 'Point the camera at the sender’s QR code'
-                            : 'Camera permission is needed to scan',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: AppColors.textSecondary,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ],
-                  ),
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            'Or enter the sender address',
-            style: TextStyle(color: AppColors.textMuted, fontSize: 12.5),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _addressController,
-            keyboardType: TextInputType.url,
-            style: const TextStyle(color: AppColors.textPrimary),
-            decoration: const InputDecoration(hintText: 'http://192.168.43.1:5000'),
-          ),
-          const SizedBox(height: 14),
-          ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Connect'),
-          ),
-        ],
-      ),
-    );
-  }
 }

@@ -13,6 +13,12 @@ import '../common/ui_kit.dart';
 class TransferSessionScreen extends StatefulWidget {
   const TransferSessionScreen({super.key});
 
+  /// True while a room is on screen. Link events keep firing during a session
+  /// (every inbound message, every upload tick), so the hand-off paths consult
+  /// this to avoid tearing the room down and building a fresh one.
+  static bool get isOpen => _openRooms > 0;
+  static int _openRooms = 0;
+
   @override
   State<TransferSessionScreen> createState() => _TransferSessionScreenState();
 }
@@ -22,7 +28,14 @@ class _TransferSessionScreenState extends State<TransferSessionScreen> {
   final _scrollController = ScrollController();
 
   @override
+  void initState() {
+    super.initState();
+    TransferSessionScreen._openRooms++;
+  }
+
+  @override
   void dispose() {
+    TransferSessionScreen._openRooms--;
     _textController.dispose();
     _scrollController.dispose();
     super.dispose();

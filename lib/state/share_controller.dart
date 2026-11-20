@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../core/network/hotspot_manager.dart';
 import '../core/network/network_helper.dart';
+import '../core/network/peer_connector.dart';
 import '../core/platform/native_bridge.dart';
 import '../core/server/embedded_server.dart';
 import '../core/server/file_storage_service.dart';
@@ -75,20 +76,22 @@ class TransferItem extends SessionEntry {
 /// The controller never changes backend behaviour: it only drives the
 /// existing services and re-exposes their state as a [ChangeNotifier].
 class ShareController extends ChangeNotifier {
-  ShareController._(this.storage, this.server);
-
   /// Builds a controller whose server always serves the same [storage].
   factory ShareController({
     EmbeddedServer? server,
     FileStorageService? storageService,
+    Future<bool> Function(PeerEndpoint endpoint)? peerProbe,
   }) {
     final storage = storageService ?? FileStorageService();
     final resolved = server ?? EmbeddedServer(storageService: storage);
-    return ShareController._(storage, resolved);
+    return ShareController._(storage, resolved, peerProbe ?? PeerConnector.probe);
   }
+
+  ShareController._(this.storage, this.server, this._peerProbe);
 
   final FileStorageService storage;
   final EmbeddedServer server;
+  final Future<bool> Function(PeerEndpoint endpoint) _peerProbe;
 
   ServerStatus status = ServerStatus.stopped;
   NetworkMode mode = NetworkMode.lan;
@@ -97,6 +100,15 @@ class ShareController extends ChangeNotifier {
   String? hotspotPassword;
   bool peerConnected = false;
   String? lastError;
+
+  /// Address of the room this device joined by scanning a peer's QR code.
+  String? connectedPeerUrl;
+  bool isConnecting = false;
+  String? connectError;
+
+  /// Increments every time a peer link comes up. The home screen watches it so
+  /// a fresh connection hands off to the transfer room exactly once.
+  int connectionEpoch = 0;
 
   final List<SessionEntry> entries = [];
   final List<ApprovalRequest> pendingRequests = [];
@@ -124,6 +136,63 @@ class ShareController extends ChangeNotifier {
   int get _counter => _entrySeq++;
   int _entrySeq = 0;
 
+  /// Marks a peer as present. Used for weaker signals (a pending approval) that
+  /// must show the "Device linked" badge without handing off to the room — the
+  /// user still has to accept the request first.
+  void _markPeerPresent() {
+    peerConnected = true;
+  }
+
+  /// Marks the peer as fully linked and starts a new connection epoch.
+  ///
+  /// Only signals that prove an established session land here: an accepted
+  /// approval, an inbound text, an upload in flight, or an accepted QR scan.
+  /// The UI watches [connectionEpoch] so it hands off to the room exactly once
+  /// per link, instead of on every state notification.
+  void _markPeerLinked() {
+    peerConnected = true;
+    connectionEpoch++;
+  }
+
+  /// Joins the room advertised by a scanned QR payload.
+  ///
+  /// Returns true when the peer answered and the room should be opened. The
+  /// payload is rejected unless it parses as a LibreShare address, so scanning
+  /// an unrelated QR code cannot hijack the flow.
+  Future<bool> connectToPeer(String payload) async {
+    if (isConnecting) return false;
+
+    final endpoint = PeerConnector.parse(payload);
+    if (endpoint == null) {
+      connectError = 'That QR code is not a LibreShare address.';
+      _notify();
+      return false;
+    }
+
+    isConnecting = true;
+    connectError = null;
+    _notify();
+
+    try {
+      final reachable = await _peerProbe(endpoint);
+      if (!reachable) {
+        connectError = 'Could not reach ${endpoint.baseUrl}. '
+            'Make sure you are on the same Wi-Fi or hotspot.';
+        return false;
+      }
+
+      connectedPeerUrl = endpoint.baseUrl;
+      _markPeerLinked();
+      return true;
+    } catch (e) {
+      connectError = 'Connection failed: $e';
+      return false;
+    } finally {
+      isConnecting = false;
+      _notify();
+    }
+  }
+
   Future<void> init() async {
     _textSub = storage.textStream.listen((text) {
       if (text.isEmpty) return;
@@ -133,14 +202,14 @@ class ShareController extends ChangeNotifier {
         incoming: true,
         text: text,
       ));
-      peerConnected = true;
+      _markPeerLinked();
       _notify();
     });
 
     _progressSub = storage.progressStream.listen((progress) {
       if (progress == null) return;
       _applyProgress(progress);
-      peerConnected = true;
+      _markPeerLinked();
       _notify();
     });
 
@@ -286,7 +355,7 @@ class ShareController extends ChangeNotifier {
         pendingRequests
           ..clear()
           ..addAll(pending);
-        if (pending.isNotEmpty) peerConnected = true;
+        if (pending.isNotEmpty) _markPeerPresent();
         _notify();
       }
     });
@@ -300,7 +369,7 @@ class ShareController extends ChangeNotifier {
   void approve(String requestId) {
     server.sessionManager.approveRequest(requestId);
     pendingRequests.removeWhere((r) => r.id == requestId);
-    peerConnected = true;
+    _markPeerLinked();
     _notify();
   }
 

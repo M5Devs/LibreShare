@@ -24,6 +24,8 @@ dependencies:
   device_info_plus: ^13.0.0
   wakelock_plus: ^1.2.1
   archive: ^4.5.2
+  mobile_scanner: ^7.5.0
+  http: ^1.5.0
 
 dev_dependencies:
   flutter_test:

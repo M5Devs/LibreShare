@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:libreshare/app_routes.dart';
+import 'package:libreshare/core/network/peer_connector.dart';
 import 'package:libreshare/core/platform/app_catalog_bridge.dart';
 import 'package:libreshare/core/platform/storage_bridge.dart';
 import 'package:libreshare/core/server/embedded_server.dart';
@@ -14,6 +15,7 @@ import 'package:libreshare/features/files/files_screen.dart';
 import 'package:libreshare/features/home/home_screen.dart';
 import 'package:libreshare/features/picker/file_picker_screen.dart';
 import 'package:libreshare/features/picker/media_catalog.dart';
+import 'package:libreshare/features/radar/qr_scanner_sheet.dart';
 import 'package:libreshare/features/radar/receive_screen.dart';
 import 'package:libreshare/features/session/transfer_session_screen.dart';
 import 'package:libreshare/state/share_controller.dart';
@@ -22,13 +24,20 @@ import 'package:libreshare/theme/app_theme.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 /// Builds a controller whose server is never actually started.
-ShareController buildController({FileStorageService? storage}) {
+ShareController buildController({
+  FileStorageService? storage,
+  Future<bool> Function(PeerEndpoint endpoint)? peerProbe,
+}) {
   final resolved = storage ?? FileStorageService();
   final server = EmbeddedServer(
     htmlContentOverride: '<html></html>',
     storageService: resolved,
   );
-  return ShareController(server: server, storageService: resolved);
+  return ShareController(
+    server: server,
+    storageService: resolved,
+    peerProbe: peerProbe,
+  );
 }
 
 /// Loaders so widget tests never touch the real filesystem.
@@ -41,15 +50,17 @@ Future<List<MediaItem>> noApks() async => const [];
 Future<StorageInfo?> noStorage() async => null;
 
 Widget wrap(ShareController controller, Widget child, {bool routes = false}) {
+  // `home` plus a routes table keeps [child] as the first screen while still
+  // letting it push the real named routes, so a screen under test can hand off
+  // to the transfer room exactly like it does in the app.
+  final table = AppRoutes.map()..remove(AppRoutes.home);
   return ShareScope(
     controller: controller,
-    child: routes
-        ? MaterialApp(
-            theme: AppTheme.dark(),
-            initialRoute: AppRoutes.home,
-            routes: AppRoutes.map(),
-          )
-        : MaterialApp(theme: AppTheme.dark(), home: child),
+    child: MaterialApp(
+      theme: AppTheme.dark(),
+      home: child,
+      routes: routes ? table : const {},
+    ),
   );
 }
 
@@ -73,9 +84,12 @@ void main() {
     PermissionHelper.androidSdkVersionOverride = null;
     PermissionHelper.checkPermissionOverride = null;
     PermissionHelper.checkServiceStatusOverride = null;
+    PermissionHelper.requestPermissionOverride = null;
+    PermissionHelper.openAppSettingsOverride = null;
   });
 
-  testWidgets('Home screen shows logo, hero actions and quick share', (tester) async {
+  testWidgets('Home screen is just the logo bar and three hero actions',
+      (tester) async {
     await useTallWindow(tester);
     final controller = buildController();
     await tester.pumpWidget(wrap(controller, const HomeScreen()));
@@ -84,8 +98,11 @@ void main() {
     expect(find.widgetWithText(HeroActionButton, 'Send'), findsOneWidget);
     expect(find.widgetWithText(HeroActionButton, 'Receive'), findsOneWidget);
     expect(find.widgetWithText(HeroActionButton, 'Files'), findsOneWidget);
-    expect(find.text('Quick Text / URL'), findsOneWidget);
     expect(find.text('Idle'), findsOneWidget);
+
+    // Text/link sharing lives in the transfer room, never on the home screen.
+    expect(find.byType(TextField), findsNothing);
+    expect(find.text('Quick Text / URL'), findsNothing);
 
     controller.dispose();
   });
@@ -106,13 +123,13 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets('Quick share sends text into the session feed', (tester) async {
+  testWidgets('Session input bar sends text into the room feed', (tester) async {
     await useTallWindow(tester);
     final controller = buildController();
-    await tester.pumpWidget(wrap(controller, const HomeScreen()));
+    await tester.pumpWidget(wrap(controller, const TransferSessionScreen()));
 
     await tester.enterText(find.byType(TextField), 'https://example.com');
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Send'));
+    await tester.tap(find.byIcon(Icons.send_rounded));
     await tester.pump();
 
     final messages = controller.entries.whereType<ChatMessage>().toList();
@@ -275,15 +292,16 @@ void main() {
   testWidgets('Files screen renders real storage numbers', (tester) async {
     await useTallWindow(tester);
     final controller = buildController();
-    // 95.5 GB used of 108 GB total.
+    // 95.5 GB used of 108.0 GB total, i.e. the figures the native StatFs
+    // reply produces on a 128 GB device.
     const total = 108 * 1024 * 1024 * 1024;
-    const used = 102 * 1024 * 1024 * 1024;
+    final used = (95.5 * 1024 * 1024 * 1024).round();
 
     await tester.pumpWidget(wrap(
       controller,
       FilesScreen(
         libraryLoader: emptyLibrary,
-        storageInfoLoader: () async => const StorageInfo(
+        storageInfoLoader: () async => StorageInfo(
           totalBytes: total,
           freeBytes: total - used,
         ),
@@ -291,8 +309,8 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('used /'), findsOneWidget);
-    expect(find.textContaining('total'), findsOneWidget);
+    expect(find.text('95.5 GB used / 108.0 GB total'), findsOneWidget);
+    expect(find.text('12.5 GB free'), findsOneWidget);
     expect(find.text('Storage details unavailable'), findsNothing);
 
     controller.dispose();
@@ -371,6 +389,290 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.byType(FilePickerScreen), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('The linked badge shows even when this phone runs no server',
+      (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController(peerProbe: (_) async => true);
+    await tester.pumpWidget(wrap(controller, const HomeScreen(), routes: true));
+    await tester.pump();
+
+    expect(controller.isRunning, isFalse);
+    expect(find.text('Device linked'), findsNothing);
+
+    await controller.connectToPeer('http://192.168.43.1:5000');
+    await tester.pumpAndSettle();
+
+    // Back on home, the strip reports the link even though no server runs.
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.text('Device linked'), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('A linked device auto-opens the transfer room from home',
+      (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController(peerProbe: (_) async => true);
+    await tester.pumpWidget(wrap(controller, const HomeScreen(), routes: true));
+    await tester.pump();
+
+    expect(find.byType(HomeScreen), findsOneWidget);
+    expect(find.byType(TransferSessionScreen), findsNothing);
+
+    // Joining a peer is a real link event, not a mock flag.
+    await controller.connectToPeer('http://192.168.43.1:5000/?t=abc');
+    await tester.pumpAndSettle();
+
+    expect(find.byType(TransferSessionScreen), findsOneWidget);
+    expect(find.byType(HomeScreen), findsNothing);
+
+    controller.dispose();
+  });
+
+  testWidgets('Auto-navigation dismisses an open sheet before opening the room',
+      (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController(peerProbe: (_) async => true);
+    await tester.pumpWidget(wrap(controller, const HomeScreen(), routes: true));
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.add_circle_outline_rounded));
+    await tester.pumpAndSettle();
+    expect(find.text('💻  Connect to PC / Tablet'), findsOneWidget);
+
+    await controller.connectToPeer('http://192.168.43.1:5000');
+    await tester.pumpAndSettle();
+
+    expect(find.byType(TransferSessionScreen), findsOneWidget);
+    expect(find.text('💻  Connect to PC / Tablet'), findsNothing);
+
+    controller.dispose();
+  });
+
+  testWidgets('A message during the session does not remount the room',
+      (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController(peerProbe: (_) async => true);
+    // Subscribes the controller to the storage streams the peer writes into.
+    await controller.init();
+    await tester.pumpWidget(wrap(controller, const HomeScreen(), routes: true));
+    await tester.pump();
+
+    await controller.connectToPeer('http://192.168.43.1:5000');
+    await tester.pumpAndSettle();
+    expect(find.byType(TransferSessionScreen), findsOneWidget);
+
+    // Type into the room's composer, then let the peer send a message.
+    final stateBefore = tester.state(find.byType(TransferSessionScreen));
+    await tester.enterText(find.byType(TextField).last, 'draft');
+    controller.storage.setLatestSharedText('hi from peer');
+    await tester.pumpAndSettle();
+
+    expect(find.byType(TransferSessionScreen), findsOneWidget);
+    expect(
+      tester.state(find.byType(TransferSessionScreen)),
+      same(stateBefore),
+      reason: 'the room must keep its state instead of being rebuilt',
+    );
+    expect(find.text('draft'), findsOneWidget);
+    expect(find.text('hi from peer'), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('Scanning a peer QR parses, connects and hands off to the room',
+      (tester) async {
+    await useTallWindow(tester);
+    PeerEndpoint? probed;
+    final controller = buildController(
+      peerProbe: (endpoint) async {
+        probed = endpoint;
+        return true;
+      },
+    );
+
+    await tester.pumpWidget(wrap(
+      controller,
+      Scaffold(
+        body: QrScannerSheet(
+          onPayload: controller.connectToPeer,
+          previewBuilder: (context, onDetect) => Center(
+            child: TextButton(
+              onPressed: () => onDetect('http://192.168.43.1:5000/?t=abc123'),
+              child: const Text('emit'),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Scan Sender QR'), findsOneWidget);
+
+    await tester.tap(find.text('emit'));
+    await tester.pumpAndSettle();
+
+    expect(probed?.host, '192.168.43.1');
+    expect(probed?.port, 5000);
+    expect(probed?.token, 'abc123');
+    expect(controller.peerConnected, isTrue);
+    expect(controller.connectedPeerUrl, 'http://192.168.43.1:5000');
+
+    controller.dispose();
+  });
+
+  testWidgets('Scanning a non-LibreShare QR code is rejected, not connected',
+      (tester) async {
+    await useTallWindow(tester);
+    var probed = false;
+    final controller = buildController(
+      peerProbe: (endpoint) async {
+        probed = true;
+        return true;
+      },
+    );
+
+    await tester.pumpWidget(wrap(
+      controller,
+      Scaffold(
+        body: QrScannerSheet(
+          onPayload: controller.connectToPeer,
+          previewBuilder: (context, onDetect) => Center(
+            child: TextButton(
+              onPressed: () => onDetect('WIFI:S:Home;T:WPA;P:secret;;'),
+              child: const Text('emit'),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('emit'));
+    await tester.pumpAndSettle();
+
+    expect(probed, isFalse);
+    expect(controller.peerConnected, isFalse);
+    expect(find.textContaining('not a LibreShare address'), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('A granted camera renders the live preview and can scan',
+      (tester) async {
+    await useTallWindow(tester);
+    PeerEndpoint? probed;
+    final controller = buildController(
+      peerProbe: (endpoint) async {
+        probed = endpoint;
+        return true;
+      },
+    );
+
+    await tester.pumpWidget(wrap(
+      controller,
+      Scaffold(
+        body: QrScannerSheet(
+          onPayload: controller.connectToPeer,
+          previewBuilder: (context, onDetect) => Center(
+            child: TextButton(
+              onPressed: () =>
+                  onDetect('http://192.168.43.1:5000/?t=abc123'),
+              child: const Text('emit'),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.pump();
+
+    // No permission prompt, because the override grants the camera.
+    expect(find.text('Camera Permission Required'), findsNothing);
+    expect(find.text('emit'), findsOneWidget);
+
+    await tester.tap(find.text('emit'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(probed?.host, '192.168.43.1');
+    expect(probed?.port, 5000);
+    expect(probed?.token, 'abc123');
+    expect(controller.connectedPeerUrl, 'http://192.168.43.1:5000');
+
+    controller.dispose();
+  });
+
+  testWidgets('Scanner falls back to the address field without camera access',
+      (tester) async {
+    await useTallWindow(tester);
+    PermissionHelper.checkPermissionOverride =
+        (perm) async => PermissionStatus.permanentlyDenied;
+    PermissionHelper.requestPermissionOverride =
+        (perm) async => PermissionStatus.permanentlyDenied;
+    PermissionHelper.openAppSettingsOverride = () async => true;
+
+    final controller = buildController(peerProbe: (_) async => true);
+    await tester.pumpWidget(wrap(
+      controller,
+      Scaffold(body: QrScannerSheet(onPayload: controller.connectToPeer)),
+    ));
+    // The sheet spins a progress indicator while the permission dialog is up,
+    // so settle by pumping fixed frames rather than waiting for quiescence.
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Camera Permission Required'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.textContaining('Camera permission is needed'), findsOneWidget);
+    expect(find.byType(TextField), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), '192.168.43.1:5000');
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Connect'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(controller.connectedPeerUrl, 'http://192.168.43.1:5000');
+
+    controller.dispose();
+  });
+
+  testWidgets('Accepting a connection request opens the transfer room',
+      (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController(peerProbe: (_) async => true);
+    await tester.pumpWidget(
+      wrap(controller, const ReceiveScreen(autoStart: false), routes: true),
+    );
+    await tester.pump();
+
+    final requestId = controller.server.sessionManager
+        .createApprovalRequest(clientIp: '10.0.0.9', deviceLabel: 'Pixel')!;
+    controller.pendingRequests
+        .add(controller.server.sessionManager.getApprovalRequest(requestId)!);
+
+    // Any public notification lets the screen surface the pending request.
+    await controller.connectToPeer('http://10.0.0.9:5000');
+    // The radar animates forever, so pump fixed frames instead of settling.
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Connection Request'), findsOneWidget);
+    expect(find.text('Device: Pixel'), findsOneWidget);
+
+    await tester.tap(find.text('Allow'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(find.byType(TransferSessionScreen), findsOneWidget);
+    expect(controller.peerConnected, isTrue);
 
     controller.dispose();
   });

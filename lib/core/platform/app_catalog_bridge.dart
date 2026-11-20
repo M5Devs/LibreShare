@@ -25,8 +25,20 @@ class InstalledAppInfo {
       packageName: map['packageName']?.toString() ?? '',
       apkPath: map['apkPath']?.toString() ?? '',
       sizeBytes: int.tryParse(map['size']?.toString() ?? '0') ?? 0,
-      iconBytes: icon is List ? icon.whereType<int>().toList() : null,
+      iconBytes: _decodeIcon(icon),
     );
+  }
+
+  /// The platform side ships PNG bytes; a `Uint8List` arrives as one, but a
+  /// channel that only carries ints yields a `List<dynamic>`. Both must work,
+  /// and a list of doubles (some platforms widen) must not corrupt icons.
+  static List<int>? _decodeIcon(Object? icon) {
+    if (icon is Uint8List) return icon.isEmpty ? null : icon;
+    if (icon is List) {
+      final bytes = icon.whereType<int>().toList(growable: false);
+      return bytes.isEmpty ? null : bytes;
+    }
+    return null;
   }
 }
 
@@ -38,13 +50,13 @@ class InstalledAppInfo {
 class AppCatalogBridge {
   AppCatalogBridge._();
 
-  static const MethodChannel _channel =
-      MethodChannel('com.<secret-hidden>.libreshare/apps');
+  static const MethodChannel channel =
+      MethodChannel('com.m5dev.libreshare/catalog');
 
   static Future<List<InstalledAppInfo>> listInstalledApps() async {
     if (!Platform.isAndroid) return const [];
     try {
-      final raw = await _channel.invokeMethod<List<dynamic>>('listInstalledApps');
+      final raw = await channel.invokeMethod<List<dynamic>>('listInstalledApps');
       if (raw == null) return const [];
       return raw
           .whereType<Map>()

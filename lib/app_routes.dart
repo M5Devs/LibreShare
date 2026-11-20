@@ -25,4 +25,22 @@ class AppRoutes {
       files: (_) => const FilesScreen(),
     };
   }
+
+  /// Opens the transfer room, closing anything stacked on top of it first.
+  ///
+  /// Every path that learns about a live peer (a scan, an approved request, the
+  /// controller's own link event) funnels through here so they all land on the
+  /// same room. Callers guard re-entry themselves, because the future below
+  /// only completes once the room is popped again.
+  static Future<void> openSession(BuildContext context) async {
+    // Home stays mounted underneath the room, so a chat message arriving mid
+    // session still triggers a link event. Without this check the room would be
+    // popped and re-pushed, throwing away scroll position and typed text.
+    if (TransferSessionScreen.isOpen) return;
+
+    final navigator = Navigator.of(context);
+    navigator.popUntil((route) => route.isFirst);
+    if (!context.mounted) return;
+    await navigator.pushNamed(session);
+  }
 }
