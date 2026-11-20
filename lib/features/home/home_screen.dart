@@ -64,7 +64,7 @@ class _HomeScreenState extends State<HomeScreen> {
           style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.2),
         ),
         actions: [
-          _OverflowMenu(controller: controller),
+          const _OverflowMenu(),
           const SizedBox(width: 6),
         ],
         bottom: PreferredSize(
@@ -166,9 +166,7 @@ class _HeroRow extends StatelessWidget {
 }
 
 class _OverflowMenu extends StatelessWidget {
-  const _OverflowMenu({required this.controller});
-
-  final ShareController controller;
+  const _OverflowMenu();
 
   @override
   Widget build(BuildContext context) {
@@ -179,32 +177,10 @@ class _OverflowMenu extends StatelessWidget {
       onSelected: (value) {
         switch (value) {
           case 'pc':
-            _showInfoSheet(
-              context,
-              title: '💻 Connect to PC / Tablet',
-              lines: [
-                '1. Join the same Wi-Fi as this phone.',
-                '2. Open a browser and go to the address below.',
-                '3. Enter the 6-digit PIN when prompted.',
-                '',
-                'Address:  ${controller.serverUrl ?? 'Start Receive for an address'}',
-                'Port:     5000',
-                'PIN:      ${controller.pin}',
-              ],
-            );
+            Navigator.of(context).pushNamed(AppRoutes.connectPc);
             break;
           case 'web':
-            _showInfoSheet(
-              context,
-              title: '🌐 Web & KaiOS Share',
-              lines: [
-                'Open this link on any browser — phones, laptops or KaiOS:',
-                '',
-                controller.serverUrl ?? 'Start Receive to get a link',
-                '',
-                'No app install required.',
-              ],
-            );
+            Navigator.of(context).pushNamed(AppRoutes.connectKaios);
             break;
           case 'bluetooth':
             ScaffoldMessenger.of(context).showSnackBar(
@@ -224,62 +200,6 @@ class _OverflowMenu extends StatelessWidget {
         PopupMenuItem(value: 'bluetooth', child: Text('📡  Invite via Bluetooth')),
         PopupMenuItem(value: 'settings', child: Text('⚙️  Settings')),
       ],
-    );
-  }
-
-  void _showInfoSheet(
-    BuildContext context, {
-    required String title,
-    required List<String> lines,
-  }) {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => _InfoSheet(title: title, lines: lines),
-    );
-  }
-}
-
-class _InfoSheet extends StatelessWidget {
-  const _InfoSheet({required this.title, required this.lines});
-
-  final String title;
-  final List<String> lines;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(22, 22, 22, 34),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: AppColors.textPrimary,
-              fontSize: 17,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 14),
-          for (final line in lines)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 3),
-              child: SelectableText(
-                line,
-                style: const TextStyle(
-                  color: AppColors.textSecondary,
-                  fontSize: 13.5,
-                  height: 1.4,
-                ),
-              ),
-            ),
-        ],
-      ),
     );
   }
 }

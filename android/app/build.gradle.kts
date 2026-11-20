@@ -63,6 +63,13 @@ kotlin {
     }
 }
 
+dependencies {
+    // FileProvider, used to hand received files to external viewers. The
+    // Flutter embedding pulls androidx.core in transitively, but naming it
+    // keeps the compile-time reference explicit.
+    implementation("androidx.core:core-ktx:1.13.1")
+}
+
 flutter {
     source = "../.."
 }

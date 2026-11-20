@@ -4,6 +4,7 @@
 # shrinking of the Flutter embedding and grow the dex substantially.
 -keep class com.m5dev.libreshare.MainActivity { *; }
 -keep class com.m5dev.libreshare.AppCatalogHandler { *; }
+-keep class com.m5dev.libreshare.MediaStoreHandler { *; }
 -keep class com.m5dev.libreshare.StorageInfoHandler { *; }
 -keep class com.m5dev.libreshare.HotspotController { *; }
 -keep class com.m5dev.libreshare.HotspotIpDetector { *; }

@@ -137,6 +137,56 @@ class PermissionHelper {
     return true;
   }
 
+  /// Requests read access to the device's photos, videos and audio.
+  ///
+  /// Android 13 split the single storage grant into per-type permissions, so a
+  /// `Permission.storage` request is a no-op there and MediaStore returns only
+  /// this app's own media — which is why the picker showed zero photos even
+  /// with "storage" granted. Each type is requested independently: a user who
+  /// denies audio must still see their photos.
+  static Future<bool> requestMediaPermissions(BuildContext context) async {
+    if (!_isAndroid) return true;
+
+    final sdkInt = await _androidSdkVersion;
+    final requested = <Permission>[];
+
+    if (sdkInt >= 33) {
+      requested.addAll([Permission.photos, Permission.videos, Permission.audio]);
+    } else {
+      requested.add(Permission.storage);
+    }
+
+    var anyGranted = false;
+    var anyPermanentlyDenied = false;
+
+    for (final permission in requested) {
+      var status = await _checkPermission(permission);
+      if (status.isDenied) {
+        status = await _requestPermission(permission);
+      }
+
+      if (status.isGranted || status.isLimited) {
+        anyGranted = true;
+      } else if (status.isPermanentlyDenied) {
+        anyPermanentlyDenied = true;
+      }
+    }
+
+    // Partial access is enough to populate the picker, so only a total refusal
+    // that Android will not prompt for again deserves a settings detour.
+    if (!anyGranted && anyPermanentlyDenied && context.mounted) {
+      await _showPermanentlyDeniedDialog(
+        context,
+        title: 'Media Permission Required',
+        message:
+            'Photos, videos and music need read access to appear in the picker. '
+            'Please enable them in Settings.',
+      );
+    }
+
+    return anyGranted;
+  }
+
   /// Request storage permissions for saving/accessing files in Download/LibreShare/.
   static Future<bool> requestStoragePermissions(BuildContext context) async {
     if (!_isAndroid) return true;

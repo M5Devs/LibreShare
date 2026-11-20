@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import '../../core/platform/media_bridge.dart';
 import '../../core/utils/transfer_metrics.dart';
 
 /// A device media file surfaced in the picker.
@@ -26,10 +27,16 @@ class MediaItem {
 /// are scanned. Directory walking is depth-limited so a deep tree cannot
 /// stall the UI isolate.
 class MediaCatalog {
-  MediaCatalog({List<String>? rootDirectories})
-      : rootDirectories = rootDirectories ?? defaultRootDirectories();
+  MediaCatalog({List<String>? rootDirectories, MediaBridgeLoader? mediaBridge})
+      : rootDirectories = rootDirectories ?? defaultRootDirectories(),
+        _mediaBridge = mediaBridge ??
+            (rootDirectories == null ? MediaBridge.listMedia : null);
 
   final List<String> rootDirectories;
+
+  /// Platform media query. Null disables it, which is what the directory-walk
+  /// tests want; on Android it is the only source that can see anything.
+  final MediaBridgeLoader? _mediaBridge;
 
   static const int _maxDepth = 4;
   static const int _maxItemsPerCategory = 2000;
@@ -78,7 +85,15 @@ class MediaCatalog {
   }
 
   /// Scans every category in one pass over the configured roots.
+  ///
+  /// On Android the platform MediaStore query is authoritative: scoped storage
+  /// hides the storage roots from `dart:io`, so the walk below would report
+  /// zero files. The walk still runs on desktop and as a fallback when the
+  /// channel is unavailable.
   Future<MediaLibrary> scan() async {
+    final platform = await _loadFromPlatform();
+    if (platform != null) return platform;
+
     final photos = <MediaItem>[];
     final videos = <MediaItem>[];
     final music = <MediaItem>[];
@@ -112,11 +127,51 @@ class MediaCatalog {
     );
   }
 
+  /// Reads photos, videos, music and documents from the platform store.
+  ///
+  /// Returns null when the platform has no store to query (desktop) or the
+  /// channel failed, so the caller can fall back to the directory walk.
+  Future<MediaLibrary?> _loadFromPlatform() async {
+    final loader = _mediaBridge;
+    if (loader == null) return null;
+
+    final MediaPayload? payload;
+    try {
+      payload = await loader();
+    } catch (_) {
+      return null;
+    }
+    if (payload == null) return null;
+
+    MediaItem toItem(MediaRow row) => MediaItem(
+          path: row.filePath ?? row.uri,
+          name: row.name,
+          sizeBytes: row.sizeBytes,
+          modifiedAt: row.modifiedAt,
+        );
+
+    // The platform already sorted newest-first; keep that order.
+    return MediaLibrary(
+      photos: payload.photos.map(toItem).toList(),
+      videos: payload.videos.map(toItem).toList(),
+      music: payload.music.map(toItem).toList(),
+      documents: payload.documents.map(toItem).toList(),
+      apks: payload.documents
+          .where((r) => apkExtensions.contains(extensionOf(r.name)))
+          .map(toItem)
+          .toList(),
+    );
+  }
+
   /// Scans the configured roots for `.apk` files that can be re-shared.
   ///
   /// These are APKs sitting in storage (downloads, Telegram, backups), as
   /// opposed to the apps currently installed on the device.
   Future<List<MediaItem>> scanApks() async {
+    // Stored APKs are documents as far as the platform store is concerned.
+    final platform = await _loadFromPlatform();
+    if (platform != null) return platform.apks;
+
     final apks = <MediaItem>[];
     for (final root in rootDirectories) {
       final dir = Directory(root);

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../features/connect/connect_kaios_screen.dart';
+import '../features/connect/connect_pc_screen.dart';
 import '../features/files/files_screen.dart';
 import '../features/home/home_screen.dart';
 import '../features/picker/file_picker_screen.dart';
@@ -15,6 +17,8 @@ class AppRoutes {
   static const String receive = '/receive';
   static const String session = '/session';
   static const String files = '/files';
+  static const String connectPc = '/connect-pc';
+  static const String connectKaios = '/connect-kaios';
 
   static Map<String, WidgetBuilder> map() {
     return {
@@ -23,6 +27,8 @@ class AppRoutes {
       receive: (_) => const ReceiveScreen(),
       session: (_) => const TransferSessionScreen(),
       files: (_) => const FilesScreen(),
+      connectPc: (_) => const ConnectPcScreen(),
+      connectKaios: (_) => const ConnectKaiosScreen(),
     };
   }
 

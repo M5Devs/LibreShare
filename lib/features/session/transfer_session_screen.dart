@@ -2,6 +2,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/platform/native_bridge.dart';
 import '../../core/server/shared_file.dart';
 import '../../core/utils/transfer_metrics.dart';
 import '../../state/share_controller.dart';
@@ -26,6 +27,10 @@ class TransferSessionScreen extends StatefulWidget {
 class _TransferSessionScreenState extends State<TransferSessionScreen> {
   final _textController = TextEditingController();
   final _scrollController = ScrollController();
+
+  /// 0 = chat feed, 1 = session files. Kept in the room so the toggle survives
+  /// rebuilds triggered by incoming messages.
+  int _view = 0;
 
   @override
   void initState() {
@@ -105,7 +110,11 @@ class _TransferSessionScreenState extends State<TransferSessionScreen> {
                     ),
                   ),
                   Text(
-                    controller.serverUrl ?? 'Room not started',
+                    // A joined device has no server of its own, so fall back to
+                    // the address it dialled.
+                    controller.serverUrl ??
+                        controller.connectedPeerUrl ??
+                        'Room not started',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: AppColors.textMuted, fontSize: 11.5),
@@ -130,31 +139,249 @@ class _TransferSessionScreenState extends State<TransferSessionScreen> {
       ),
       body: Column(
         children: [
+          _ViewToggle(
+            view: _view,
+            onChanged: (v) => setState(() => _view = v),
+          ),
           Expanded(
-            child: entries.isEmpty
-                ? const EmptyState(
-                    icon: Icons.forum_rounded,
-                    title: 'Room is quiet',
-                    subtitle: 'Send a message or attach files to start the session.',
-                  )
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
-                    itemCount: entries.length,
-                    itemBuilder: (context, i) {
-                      final entry = entries[i];
-                      if (entry is ChatMessage) {
-                        return _ChatBubble(message: entry);
-                      }
-                      return _TransferCard(item: entry as TransferItem);
-                    },
-                  ),
+            child: _view == 0
+                ? _buildChatFeed(entries)
+                : _SessionFilesView(entries: entries),
           ),
-          _InputBar(
-            controller: _textController,
-            onSend: _sendText,
-            onAttach: _attachFiles,
+          // The composer belongs to the chat view; showing it over a file list
+          // would push the list up and hide rows behind the keyboard.
+          if (_view == 0)
+            _InputBar(
+              controller: _textController,
+              onSend: _sendText,
+              onAttach: _attachFiles,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChatFeed(List<Object> entries) {
+    if (entries.isEmpty) {
+      return const EmptyState(
+        icon: Icons.forum_rounded,
+        title: 'Room is quiet',
+        subtitle: 'Send a message or attach files to start the session.',
+      );
+    }
+
+    return ListView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      itemCount: entries.length,
+      itemBuilder: (context, i) {
+        final entry = entries[i];
+        if (entry is ChatMessage) {
+          return _ChatBubble(message: entry);
+        }
+        return _TransferCard(item: entry as TransferItem);
+      },
+    );
+  }
+}
+
+/// Segmented control switching the room between chat and its file list.
+class _ViewToggle extends StatelessWidget {
+  const _ViewToggle({required this.view, required this.onChanged});
+
+  final int view;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: AppColors.background,
+      padding: const EdgeInsets.fromLTRB(14, 6, 14, 10),
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Row(
+          children: [
+            _ToggleTab(
+              label: 'Live Chat',
+              icon: Icons.forum_rounded,
+              selected: view == 0,
+              onTap: () => onChanged(0),
+            ),
+            _ToggleTab(
+              label: 'Session Files',
+              icon: Icons.folder_rounded,
+              selected: view == 1,
+              onTap: () => onChanged(1),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ToggleTab extends StatelessWidget {
+  const _ToggleTab({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(vertical: 9),
+          decoration: BoxDecoration(
+            color: selected
+                ? AppColors.primary.withValues(alpha: 0.22)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(11),
+            border: Border.all(
+              color: selected
+                  ? AppColors.primary.withValues(alpha: 0.55)
+                  : Colors.transparent,
+            ),
           ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 15,
+                color: selected ? AppColors.primary : AppColors.textMuted,
+              ),
+              const SizedBox(width: 7),
+              Text(
+                label,
+                style: TextStyle(
+                  color: selected ? AppColors.textPrimary : AppColors.textMuted,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12.5,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Every file that moved during this session, sendable or openable in place.
+class _SessionFilesView extends StatelessWidget {
+  const _SessionFilesView({required this.entries});
+
+  final List<Object> entries;
+
+  @override
+  Widget build(BuildContext context) {
+    final files = entries.whereType<TransferItem>().toList().reversed.toList();
+
+    if (files.isEmpty) {
+      return const EmptyState(
+        icon: Icons.folder_open_rounded,
+        title: 'No files in this session yet',
+        subtitle: 'Files you send or receive in this room will be listed here.',
+      );
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(14, 6, 14, 20),
+      itemCount: files.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
+      itemBuilder: (context, i) => _SessionFileRow(item: files[i]),
+    );
+  }
+}
+
+class _SessionFileRow extends StatelessWidget {
+  const _SessionFileRow({required this.item});
+
+  final TransferItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final ready = item.status == TransferStatus.completed ||
+        item.status == TransferStatus.shared;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        children: [
+          CategoryAvatar(category: item.category, size: 38),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TruncatedName(name: item.fileName, maxLength: 28),
+                const SizedBox(height: 3),
+                Text(
+                  '${item.incoming ? 'Received' : 'Sent'} • '
+                  '${TransferMetrics.formatSize(item.totalBytes)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: AppColors.textMuted, fontSize: 11.5),
+                ),
+              ],
+            ),
+          ),
+          if (ready)
+            IconButton(
+              tooltip: 'Open',
+              onPressed: () async {
+                final path = item.filePath;
+                final opened = path != null &&
+                    await NativeBridge.openFile(path);
+                if (!opened && context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'No app can open ${item.fileName} on this device',
+                      ),
+                    ),
+                  );
+                }
+              },
+              icon: const Icon(
+                Icons.open_in_new_rounded,
+                size: 18,
+                color: AppColors.accent,
+              ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Text(
+                '${item.percent.toStringAsFixed(0)}%',
+                style: const TextStyle(
+                  color: AppColors.textMuted,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
         ],
       ),
     );

@@ -28,6 +28,11 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      # Fails the build on any analyzer warning, so a clean `flutter analyze`
+      # is enforced rather than trusted.
+      - name: Analyze
+        run: flutter analyze --fatal-infos
+
       - name: Run tests
         run: flutter test
 

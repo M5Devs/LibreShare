@@ -11,6 +11,8 @@ import 'package:libreshare/core/server/file_storage_service.dart';
 import 'package:libreshare/core/server/shared_file.dart';
 import 'package:libreshare/core/utils/permission_helper.dart';
 import 'package:libreshare/features/common/ui_kit.dart';
+import 'package:libreshare/features/connect/connect_kaios_screen.dart';
+import 'package:libreshare/features/connect/connect_pc_screen.dart';
 import 'package:libreshare/features/files/files_screen.dart';
 import 'package:libreshare/features/home/home_screen.dart';
 import 'package:libreshare/features/picker/file_picker_screen.dart';
@@ -49,7 +51,26 @@ Future<List<MediaItem>> noApks() async => const [];
 
 Future<StorageInfo?> noStorage() async => null;
 
-Widget wrap(ShareController controller, Widget child, {bool routes = false}) {
+/// Captures named-route pushes so a test can assert navigation without
+/// building the destination screen (which may start real services).
+class _RouteRecorder extends NavigatorObserver {
+  final List<String> pushedNames = [];
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    final name = route.settings.name;
+    if (name != null) pushedNames.add(name);
+    super.didPush(route, previousRoute);
+  }
+}
+
+Widget wrap(
+  ShareController controller,
+  Widget child, {
+  bool routes = false,
+  NavigatorObserver? observer,
+  Map<String, WidgetBuilder>? routeOverrides,
+}) {
   // `home` plus a routes table keeps [child] as the first screen while still
   // letting it push the real named routes, so a screen under test can hand off
   // to the transfer room exactly like it does in the app.
@@ -59,7 +80,8 @@ Widget wrap(ShareController controller, Widget child, {bool routes = false}) {
     child: MaterialApp(
       theme: AppTheme.dark(),
       home: child,
-      routes: routes ? table : const {},
+      routes: routes ? {...table, ...?routeOverrides} : const {},
+      navigatorObservers: observer == null ? const [] : [observer],
     ),
   );
 }
@@ -157,8 +179,94 @@ void main() {
     expect(find.text('Videos 🎬'), findsOneWidget);
     expect(find.text('Music 🎵'), findsOneWidget);
     expect(find.text('Files 📄'), findsOneWidget);
-    expect(find.text('Select files to send'), findsOneWidget);
-    expect(find.text('Next / Send'), findsOneWidget);
+    // Nothing selected is still a valid state: Next opens the room so the
+    // user can receive or chat, which is the SHAREit behaviour.
+    expect(find.text('Nothing selected'), findsOneWidget);
+    expect(find.text('Tap Next to just open the room'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Next'), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('Selection bar summarises picks and opens the review drawer',
+      (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController();
+    final library = MediaLibrary(
+      photos: [
+        MediaItem(path: '/p/a.jpg', name: 'a.jpg', sizeBytes: 2 * 1024 * 1024),
+        MediaItem(path: '/p/b.jpg', name: 'b.jpg', sizeBytes: 3 * 1024 * 1024),
+      ],
+      videos: const [],
+      music: const [],
+      documents: const [],
+    );
+
+    await tester.pumpWidget(wrap(
+      controller,
+      FilePickerScreen(
+        libraryLoader: () async => library,
+        appLoader: noApps,
+        apkLoader: noApks,
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Photos 📸'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('a.jpg'));
+    await tester.pump();
+    await tester.tap(find.text('b.jpg'));
+    await tester.pump();
+
+    expect(find.text('2 files selected'), findsOneWidget);
+    expect(find.text('5.00 MB • tap to review'), findsOneWidget);
+
+    // Tapping the bar reveals every pick with a remove action.
+    await tester.tap(find.text('2 files selected'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('a.jpg'), findsWidgets);
+    expect(find.text('b.jpg'), findsWidgets);
+    expect(find.byIcon(Icons.remove_circle_rounded), findsNWidgets(2));
+
+    // Removing one drops it from the selection and the count follows.
+    await tester.tap(find.byIcon(Icons.remove_circle_rounded).first);
+    await tester.pumpAndSettle();
+    expect(find.text('1 file selected'), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('Send with nothing selected still opens the room', (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController();
+    final observer = _RouteRecorder();
+
+    await tester.pumpWidget(wrap(
+      controller,
+      const FilePickerScreen(
+        libraryLoader: emptyLibrary,
+        appLoader: noApps,
+        apkLoader: noApks,
+      ),
+      routes: true,
+      observer: observer,
+      // A stub stands in for the real screen: ReceiveScreen auto-starts the
+      // server and leaves timers that outlive the test binding.
+      routeOverrides: {AppRoutes.receive: (_) => const SizedBox.shrink()},
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Next'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    // Recorded rather than mounted: ReceiveScreen auto-starts the server, and
+    // the resulting timers outlive the test binding's invariants check.
+    expect(observer.pushedNames, contains(AppRoutes.receive));
+    expect(controller.entries, isEmpty);
 
     controller.dispose();
   });
@@ -673,6 +781,142 @@ void main() {
 
     expect(find.byType(TransferSessionScreen), findsOneWidget);
     expect(controller.peerConnected, isTrue);
+
+    controller.dispose();
+  });
+
+  testWidgets('Transfer room toggles between chat and session files',
+      (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController();
+    await tester.pumpWidget(wrap(controller, const TransferSessionScreen()));
+    await tester.pump();
+
+    expect(find.text('Live Chat'), findsOneWidget);
+    expect(find.text('Session Files'), findsOneWidget);
+
+    // Chat is the default view, so the composer is visible.
+    expect(find.byType(TextField), findsOneWidget);
+
+    // Nothing has moved yet, so the files tab explains itself.
+    await tester.tap(find.text('Session Files'));
+    await tester.pumpAndSettle();
+    expect(find.text('No files in this session yet'), findsOneWidget);
+    // The composer is chat-only; it must not cover the file list.
+    expect(find.byType(TextField), findsNothing);
+
+    controller.dispose();
+  });
+
+  testWidgets('Session files lists what moved in the room', (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController();
+    await tester.pumpWidget(wrap(controller, const TransferSessionScreen()));
+    await tester.pump();
+
+    controller.shareFiles([
+      SharedFile(
+        id: 'f1',
+        name: 'holiday.jpg',
+        size: 2 * 1024 * 1024,
+        type: 'image/jpeg',
+        filePath: '/tmp/holiday.jpg',
+      ),
+    ]);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Session Files'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('holiday.jpg'), findsOneWidget);
+    expect(find.textContaining('Sent • 2.00 MB'), findsOneWidget);
+    // A shared file is complete, so it offers an open action.
+    expect(find.byIcon(Icons.open_in_new_rounded), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('Connect to PC shows the address, PIN and copy actions',
+      (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController();
+    controller.serverUrl = 'http://192.168.43.1:5000';
+
+    await tester.pumpWidget(
+      wrap(controller, ConnectPcScreen(controllerOverride: controller)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Connect to PC'), findsOneWidget);
+    expect(find.text('http://192.168.43.1:5000/pc'), findsOneWidget);
+    expect(find.text(controller.pin), findsOneWidget);
+    expect(find.text('Join the same Wi-Fi'), findsOneWidget);
+    expect(find.text('Enter the 6-digit PIN'), findsOneWidget);
+    // Every value on this screen exists to be copied elsewhere.
+    expect(find.byIcon(Icons.copy_rounded), findsNWidgets(3));
+
+    controller.dispose();
+  });
+
+  testWidgets('Connect to PC explains itself before the server runs',
+      (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController();
+
+    await tester.pumpWidget(
+      wrap(controller, ConnectPcScreen(controllerOverride: controller)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Start Receive first'), findsOneWidget);
+    expect(find.byIcon(Icons.copy_rounded), findsNothing);
+
+    controller.dispose();
+  });
+
+  testWidgets('KaiOS screen leads with the typed address', (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController();
+    controller.serverUrl = 'http://192.168.43.1:5000';
+
+    await tester.pumpWidget(
+      wrap(controller, ConnectKaiosScreen(controllerOverride: controller)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('KaiOS & Feature Phones'), findsOneWidget);
+    expect(find.text('http://192.168.43.1:5000'), findsOneWidget);
+    expect(find.text('Works without installing anything'), findsOneWidget);
+
+    controller.dispose();
+  });
+
+  testWidgets('Home menu opens the dedicated connect screens, not a sheet',
+      (tester) async {
+    await useTallWindow(tester);
+    final controller = buildController();
+    final observer = _RouteRecorder();
+
+    await tester.pumpWidget(wrap(
+      controller,
+      const HomeScreen(),
+      routes: true,
+      observer: observer,
+      routeOverrides: {
+        AppRoutes.connectPc: (_) => const SizedBox.shrink(),
+        AppRoutes.connectKaios: (_) => const SizedBox.shrink(),
+      },
+    ));
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.add_circle_outline_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('💻  Connect to PC / Tablet'));
+    await tester.pumpAndSettle();
+
+    expect(observer.pushedNames, contains(AppRoutes.connectPc));
+    // The old implementation raised a modal sheet; a full screen must not.
+    expect(find.byType(BottomSheet), findsNothing);
 
     controller.dispose();
   });

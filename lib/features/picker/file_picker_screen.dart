@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../../app_routes.dart';
 import '../../core/platform/app_catalog_bridge.dart';
 import '../../core/server/shared_file.dart';
+import '../../core/utils/permission_helper.dart';
 import '../../core/utils/transfer_metrics.dart';
 import '../../state/share_scope.dart';
 import '../../theme/app_theme.dart';
@@ -94,6 +95,14 @@ class _FilePickerScreenState extends State<FilePickerScreen>
   }
 
   Future<void> _load() async {
+    // Ask for media read access first: on Android 13+ a missing grant makes
+    // MediaStore return only this app's own files, which reads as "0 photos".
+    // Tests inject a loader, so they skip the platform prompt entirely.
+    if (widget.libraryLoader == null && mounted) {
+      await PermissionHelper.requestMediaPermissions(context);
+      if (!mounted) return;
+    }
+
     // Each source is settled independently: an unreadable media library must
     // not empty the Apps tab, and vice versa.
     final library = await _guard(_libraryLoader, MediaLibrary.empty);
@@ -133,12 +142,42 @@ class _FilePickerScreenState extends State<FilePickerScreen>
       _selectedItems.values.fold(0, (sum, item) => sum + item.sizeBytes);
 
   void _proceed() {
-    if (_selectedItems.isEmpty) return;
     final controller = ShareScope.of(context);
-    controller.shareFiles(
-      _selectedItems.values.map((e) => e.toSharedFile()).toList(),
-    );
+    // Sending nothing is a valid choice: the user may only want the room to
+    // receive files or chat, which is how SHAREit behaves.
+    if (_selectedItems.isNotEmpty) {
+      controller.shareFiles(
+        _selectedItems.values.map((e) => e.toSharedFile()).toList(),
+      );
+    }
     Navigator.of(context).pushNamed(AppRoutes.receive);
+  }
+
+  void _removeSelection(PickableItem item) {
+    setState(() {
+      _selectedPaths.remove(item.path);
+      _selectedItems.remove(item.path);
+    });
+  }
+
+  /// Opens the review drawer listing every pick across all five tabs.
+  Future<void> _reviewSelection() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => _SelectionDrawer(
+        items: _selectedItems.values.toList(),
+        onRemove: _removeSelection,
+        onSend: () {
+          Navigator.of(ctx).pop();
+          _proceed();
+        },
+      ),
+    );
   }
 
   @override
@@ -204,6 +243,7 @@ class _FilePickerScreenState extends State<FilePickerScreen>
                 _SelectionBar(
                   count: _selectedItems.length,
                   totalBytes: _totalBytes,
+                  onTap: _reviewSelection,
                   onSend: _proceed,
                 ),
               ],
@@ -635,18 +675,21 @@ class _SelectionBar extends StatelessWidget {
   const _SelectionBar({
     required this.count,
     required this.totalBytes,
+    required this.onTap,
     required this.onSend,
   });
 
   final int count;
   final int totalBytes;
+  final VoidCallback onTap;
   final VoidCallback onSend;
 
   @override
   Widget build(BuildContext context) {
-    final enabled = count > 0;
+    final hasSelection = count > 0;
+
     return Container(
-      padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 16),
       decoration: const BoxDecoration(
         color: AppColors.surface,
         border: Border(top: BorderSide(color: AppColors.border)),
@@ -654,37 +697,223 @@ class _SelectionBar extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  count == 0
-                      ? 'Select files to send'
-                      : 'Selected $count file${count == 1 ? '' : 's'}',
-                  style: const TextStyle(
-                    color: AppColors.textPrimary,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 14,
+            child: Material(
+              color: hasSelection
+                  ? AppColors.primary.withValues(alpha: 0.12)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(14),
+              child: InkWell(
+                onTap: hasSelection ? onTap : null,
+                borderRadius: BorderRadius.circular(14),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  child: Row(
+                    children: [
+                      Icon(
+                        hasSelection
+                            ? Icons.unfold_more_rounded
+                            : Icons.checklist_rounded,
+                        size: 18,
+                        color: hasSelection ? AppColors.primary : AppColors.textMuted,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              hasSelection
+                                  ? '$count file${count == 1 ? '' : 's'} selected'
+                                  : 'Nothing selected',
+                              style: TextStyle(
+                                color: hasSelection
+                                    ? AppColors.textPrimary
+                                    : AppColors.textMuted,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13.5,
+                              ),
+                            ),
+                            const SizedBox(height: 1),
+                            Text(
+                              hasSelection
+                                  ? '${TransferMetrics.formatSize(totalBytes)} • tap to review'
+                                  : 'Tap Next to just open the room',
+                              style: const TextStyle(
+                                color: AppColors.textMuted,
+                                fontSize: 11.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                if (count > 0)
-                  Text(
-                    'Total: ${TransferMetrics.formatSize(totalBytes)}',
-                    style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
-                  ),
-              ],
+              ),
             ),
           ),
+          const SizedBox(width: 10),
+          // Always enabled: an empty selection still opens the room so the
+          // user can receive or chat, which is the SHAREit behaviour.
           ElevatedButton.icon(
-            onPressed: enabled ? onSend : null,
+            onPressed: onSend,
             icon: const Icon(Icons.arrow_forward_rounded, size: 18),
-            label: const Text('Next / Send'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: enabled ? AppColors.primary : AppColors.surfaceHigh,
-              foregroundColor: enabled ? Colors.white : AppColors.textMuted,
-            ),
+            label: const Text('Next'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Expandable review of every selection, across all picker tabs.
+class _SelectionDrawer extends StatefulWidget {
+  const _SelectionDrawer({
+    required this.items,
+    required this.onRemove,
+    required this.onSend,
+  });
+
+  final List<PickableItem> items;
+  final void Function(PickableItem) onRemove;
+  final VoidCallback onSend;
+
+  @override
+  State<_SelectionDrawer> createState() => _SelectionDrawerState();
+}
+
+class _SelectionDrawerState extends State<_SelectionDrawer> {
+  /// The sheet sits on its own route, so parent rebuilds do not reach it.
+  /// Removals are applied here and mirrored to the picker via [onRemove].
+  late List<PickableItem> _items = List.of(widget.items);
+
+  int get _totalBytes => _items.fold(0, (sum, item) => sum + item.sizeBytes);
+
+  void _remove(PickableItem item) {
+    setState(() => _items = _items.where((e) => e.path != item.path).toList());
+    widget.onRemove(item);
+    // An empty review list has nothing left to show, so close it and let the
+    // picker's own empty state take over.
+    if (_items.isEmpty) Navigator.of(context).maybePop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final height = MediaQuery.of(context).size.height;
+
+    return SafeArea(
+      top: false,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: height * 0.72),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 10),
+            Container(
+              width: 42,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.textMuted,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Review selection',
+                          style: TextStyle(
+                            color: AppColors.textPrimary,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${_items.length} item${_items.length == 1 ? '' : 's'} • '
+                          '${TransferMetrics.formatSize(_totalBytes)}',
+                          style: const TextStyle(
+                            color: AppColors.textMuted,
+                            fontSize: 12.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: widget.onSend,
+                    child: const Text('Send →'),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                padding: const EdgeInsets.fromLTRB(14, 10, 14, 16),
+                itemCount: _items.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 8),
+                itemBuilder: (context, i) {
+                  final item = _items[i];
+                  return Container(
+                    padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceHigh,
+                      borderRadius: BorderRadius.circular(13),
+                      border: Border.all(color: AppColors.border),
+                    ),
+                    child: Row(
+                      children: [
+                        CategoryAvatar(category: item.category, size: 34),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                item.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: AppColors.textPrimary,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                '${item.category} • ${TransferMetrics.formatSize(item.sizeBytes)}',
+                                style: const TextStyle(
+                                  color: AppColors.textMuted,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Remove ${item.name}',
+                          onPressed: () => _remove(item),
+                          icon: const Icon(
+                            Icons.remove_circle_rounded,
+                            color: AppColors.danger,
+                            size: 20,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

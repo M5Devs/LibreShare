@@ -43,6 +43,14 @@ class MainActivity : FlutterActivity() {
                         LibreShareService.stop(this)
                         result.success(true)
                     }
+                    "openFile" -> {
+                        val path = call.argument<String>("path")
+                        if (path == null) {
+                            result.error("INVALID_PATH", "Path is null", null)
+                        } else {
+                            result.success(openFile(path, call.argument<String>("mime")))
+                        }
+                    }
                     "scanMediaFile" -> {
                         val path = call.argument<String>("path")
                         if (path != null) {
@@ -62,6 +70,13 @@ class MainActivity : FlutterActivity() {
         MethodChannel(messenger, "com.m5dev.libreshare/catalog").setMethodCallHandler { call, result ->
             when (call.method) {
                 "listInstalledApps" -> AppCatalogHandler.listInstalledApps(applicationContext, result)
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(messenger, "com.m5dev.libreshare/media").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "listMedia" -> MediaStoreHandler.listMedia(applicationContext, result)
                 else -> result.notImplemented()
             }
         }
@@ -94,5 +109,40 @@ class MainActivity : FlutterActivity() {
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         NativeEvents.sink = null
         super.cleanUpFlutterEngine(flutterEngine)
+    }
+
+    /**
+     * Hands a file to whichever app can display it.
+     *
+     * `file://` URIs are rejected by Android 7+, so the path goes through our
+     * FileProvider and the receiving app gets a temporary read grant. A missing
+     * handler (no gallery, no PDF reader) is reported rather than swallowed.
+     */
+    private fun openFile(path: String, mime: String?): Boolean {
+        val file = java.io.File(path)
+        if (!file.exists()) return false
+
+        val type = mime?.takeIf { it.isNotEmpty() }
+            ?: android.webkit.MimeTypeMap.getSingleton()
+                .getMimeTypeFromExtension(file.extension.lowercase())
+            ?: "*/*"
+
+        return try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                this,
+                "$packageName.fileprovider",
+                file,
+            )
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, type)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(intent)
+            true
+        } catch (e: Exception) {
+            // No viewer installed, or the provider rejected the path.
+            android.util.Log.w("LibreShare", "Cannot open $path: ${e.message}")
+            false
+        }
     }
 }

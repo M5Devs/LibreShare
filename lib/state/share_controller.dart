@@ -54,10 +54,15 @@ class TransferItem extends SessionEntry {
     this.etaString = '',
     this.status = TransferStatus.active,
     this.category = 'Documents',
+    this.filePath,
   });
 
   final String fileName;
   final int totalBytes;
+
+  /// On-disk location once known. Incoming files only learn theirs when the
+  /// upload completes, so this is resolved lazily by the room's file list.
+  String? filePath;
   int transferredBytes;
   double percent;
   String speedString;
@@ -246,9 +251,23 @@ class ShareController extends ChangeNotifier {
       ..etaString = progress.etaString
       ..status = progress.isCompleted ? TransferStatus.completed : TransferStatus.active;
 
+    // The saved path is only known once the server has finished writing, so
+    // look it up from the received list rather than plumbing it through every
+    // progress tick.
+    if (progress.isCompleted && existing.filePath == null) {
+      existing.filePath = _receivedPathFor(progress.filename);
+    }
+
     if (!entries.contains(existing)) {
       entries.add(existing);
     }
+  }
+
+  String? _receivedPathFor(String fileName) {
+    for (final file in storage.receivedFiles) {
+      if (file.name == fileName) return file.filePath;
+    }
+    return null;
   }
 
   Future<void> start({NetworkMode networkMode = NetworkMode.lan}) async {
@@ -392,6 +411,7 @@ class ShareController extends ChangeNotifier {
         percent: 100,
         status: TransferStatus.shared,
         category: storage.getCategoryForFilename(file.name),
+        filePath: file.filePath,
       ));
     }
     _notify();
